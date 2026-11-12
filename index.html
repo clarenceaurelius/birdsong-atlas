@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b1116">
+  <meta name="description" content="Identify birds by sound and explore the shape of their songs.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./assets/icon.png">
+  <link rel="apple-touch-icon" href="./assets/icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+  <title>Birdsong Atlas</title>
+</head>
+<body>
+  <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-signal" viewBox="0 0 24 24"><path d="M2 12h3m2-4v8m3-12v16m4-18v20m3-14v8m3-6v4m2-2h1"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 5-8 10-8 10s-8-5-8-10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-3 0h6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14m6-14v14" stroke-width="2.5"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 2 9 5v10l-9 5-9-5V7Zm0 10L3 7m9 5 9-5m-9 5v10"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 7M4 4v6h6"/></symbol>
+    <symbol id="i-full" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M5 10a7 7 0 1 1 2 7m-2-3v-4h4m3-2v4l3 2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></symbol>
+    <symbol id="i-bird" viewBox="0 0 24 24"><path d="M2 16c6 0 8-7 12-7h1m-9 7c7 2 12 0 13-5l3-2-3-1a4 4 0 0 0-7-1l-2 3m3 7-2 4m5-4 1 3"/></symbol>
+  </svg>
+  <header class="masthead">
+    <div class="topbar">
+      <a class="brand" href="#listen" aria-label="Birdsong Atlas home"><span class="brand-icon"><svg><use href="#i-signal"/></svg></span><span>Birdsong <b>Atlas</b></span></a>
+      <nav aria-label="Main navigation"><a href="#listen" id="navListen" aria-current="page">Listen</a><a href="#method" id="navMethod">The method</a></nav>
+      <button class="location button" id="location"><svg><use href="#i-pin"/></svg><span id="locationText">Enable location</span></button>
+    </div>
+  </header>
+  <main>
+    <div id="listen">
+      <section class="intro" aria-labelledby="pageTitle">
+        <div class="intro-copy"><div class="kicker"><span class="dot"></span> FIELD RECORDER</div>
+          <h1 id="pageTitle">Hear the wild. <em>See its shape.</em></h1>
+          <p>Identify birds by sound and explore their songs in three dimensions.</p>
+        </div>
+        <div class="actions">
+          <button id="record" class="button primary"><svg><use href="#i-mic"/></svg><span>Record</span></button>
+          <button id="upload" class="button secondary"><svg><use href="#i-upload"/></svg><span>Import audio</span></button>
+          <input type="file" id="file" accept="audio/*,.wav,.flac,.m4a,.mp3,.ogg,.webm,.aiff" hidden>
+        </div>
+      </section>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <section class="panel clip-editor" id="clipEditor" aria-labelledby="clipHeading" hidden>
+        <h2 id="clipHeading">Review recording</h2>
+        <div class="clip-wave"><canvas id="clipWave" aria-hidden="true"></canvas></div>
+        <div class="clip-boundaries">
+          <label for="clipStart">Start <output id="clipStartTime"></output><input id="clipStart" type="range" min="0" step="1"></label>
+          <label for="clipEnd">End <output id="clipEndTime"></output><input id="clipEnd" type="range" min="0" step="1"></label>
+        </div>
+        <div class="clip-actions">
+          <button type="button" class="button secondary" id="clipPreview">Replay selection</button>
+          <button type="button" class="button secondary" id="clipReset">Reset crop</button>
+          <button type="button" class="button primary" id="clipAnalyze">Analyze selection</button>
+        </div>
+      </section>
+      <div class="workspace">
+        <section class="panel explorer" id="explorer" aria-labelledby="vizHeading">
+          <div class="panel-top">
+            <div class="panel-title"><div class="section-icon"><svg><use href="#i-box"/></svg></div><div><h2 id="vizHeading">Sound Explorer</h2><p id="vizSubtitle">40 MFCCs → 3 principal components</p></div></div>
+            <div class="segments" aria-label="Visualization view">
+              <button data-view="manifold" aria-pressed="true">3D manifold</button>
+              <button data-view="pitch" aria-pressed="false">Pitch trail</button>
+              <button data-view="energy" aria-pressed="false">Energy flow</button>
+            </div>
+          </div>
+          <div class="manifold-controls" id="manifoldControls">
+            <div class="segments" role="group" aria-label="3D manifold display">
+              <button type="button" data-manifold="animated" aria-pressed="true" aria-controls="visual">Animated</button>
+              <button type="button" data-manifold="complete" aria-pressed="false" aria-controls="visual">Complete</button>
+            </div>
+            <button type="button" class="animation-control" id="animationControl" aria-controls="visual" disabled><svg aria-hidden="true"><use href="#i-pause"/></svg><span>Pause animation</span></button>
+          </div>
+          <div class="plot" id="plot" data-view="manifold">
+            <canvas id="visual" tabindex="0" aria-label="Fading 3D sound trail. Use arrow keys to rotate or press Enter to inspect the current node."></canvas>
+            <div class="plot-label"><span class="dot"></span><span id="sessionLabel">DEMO SOUNDSCAPE</span></div>
+            <div class="plot-tools">
+              <button class="square" id="reset" aria-label="Reset view" title="Reset view"><svg><use href="#i-reset"/></svg></button>
+              <button class="square" id="expand" aria-label="Expand explorer" title="Expand explorer"><svg><use href="#i-full"/></svg></button>
+            </div>
+            <div class="plot-hint" id="plotHint"><svg><use href="#i-rotate"/></svg> Drag to rotate · Scroll or pinch to zoom</div>
+            <div class="legend" id="legend"><span>SPECTRAL CENTROID</span><div class="gradient"></div><div><span id="rangeLow">0 kHz</span><span id="rangeHigh">8 kHz</span></div></div>
+            <div id="point" class="point" hidden></div>
+          </div>
+          <div class="transport">
+            <button id="play" class="play" title="Play audio" aria-label="Play audio"><svg><use href="#i-play"/></svg></button>
+            <span class="time" id="elapsed">0:00</span>
+            <div class="wave-wrap"><canvas id="wave"></canvas><input id="seek" type="range" aria-label="Seek recording" min="0" max="18.6" value="0" step=".01"></div>
+            <span class="time" id="duration">0:18</span>
+            <button type="button" id="replay" class="square" aria-label="Replay audio" title="Replay audio"><svg><use href="#i-reset"/></svg></button>
+            <button type="button" id="editClip" class="button secondary clip-edit" hidden>Crop</button>
+          </div>
+        </section>
+        <aside class="panel detections" aria-labelledby="birdsHeading">
+          <div class="det-head"><div><h2 id="birdsHeading">Detected birds <span class="count" id="count">3</span></h2><p id="resultSubtitle">Illustrative detections in the demo</p></div><span class="det-icon"><svg><use href="#i-signal"/></svg></span></div>
+          <div id="species" class="species" aria-live="polite"></div>
+          <div class="side-foot"><svg><use href="#i-info"/></svg><span id="locationNote">Enable location to refine real detections by season and region.</span></div>
+        </aside>
+      </div>
+      <div class="below"><span><span class="privacy-dot"></span> Audio and coordinates stay on your device</span><button class="text-button" id="loadDemo" hidden>Load demo soundscape <svg><use href="#i-chevron"/></svg></button><a href="#method">About the sound model <svg><use href="#i-chevron"/></svg></a></div>
+    </div>
+    <section id="method" class="method" hidden>
+      <div class="kicker"><span class="dot"></span> ACOUSTIC ANALYSIS</div>
+      <h1>The shape of <em>birdsong.</em></h1>
+      <p class="method-lead">Explore the changing timbre of a recording through a three-dimensional trajectory inspired by Lucio Arese’s <i>Seeing Birdsong</i>.</p>
+      <div class="method-grid">
+        <article class="panel method-card"><h2>From audio to points</h2><p>The app computes 40 mel-frequency cepstral coefficients for each frame. It centers the coefficient vectors and fits principal component analysis to the recording. The first three components position each point.</p><p>Animated mode draws a connected trail that fades over 5.5 seconds. When a distinct note with a similar dominant frequency returns, its nodes swell. Color encodes spectral centroid. Tap a node to inspect its time, dominant frequency, centroid and amplitude. Complete mode shows the full trajectory.</p></article>
+        <article class="panel method-card"><h2>From audio to species</h2><p>BirdNET scores overlapping three-second windows independently for each species, so several species can appear in the same window. A species selection highlights its detection windows in the mixed recording.</p><p>With your permission, BirdNET’s geomodel uses your coordinates and time of year to refine ranking. Acoustic confidence remains visible separately. The demo uses synthesized audio and illustrative detections.</p></article>
+      </div>
+      <div class="credits">
+        <p>Visualization inspiration <a href="https://www.lucioarese.net/seeing-birdsong/" target="_blank" rel="noreferrer">Seeing Birdsong · Lucio Arese ↗</a></p>
+        <p>Powered by <a href="https://birdnet.cornell.edu/" target="_blank" rel="noreferrer">BirdNET ↗</a> · Cornell Lab of Ornithology and Chemnitz University of Technology. <a href="https://huggingface.co/tphakala/BirdNET-v2.4" target="_blank" rel="noreferrer">Acoustic model ↗</a> · <a href="https://huggingface.co/tphakala/BirdNET-Geomodel" target="_blank" rel="noreferrer">Geomodel ↗</a></p>
+        <p id="photoCredits"></p>
+      </div>
+      <a class="button secondary" href="#listen">Back to listening <svg><use href="#i-chevron"/></svg></a>
+    </section>
+  </main>
+  <dialog id="locationDialog">
+    <form method="dialog"><button class="square dialog-close" aria-label="Close"><svg><use href="#i-close"/></svg></button></form>
+    <div class="section-icon"><svg><use href="#i-pin"/></svg></div><h2>Location</h2>
+    <p>Use your approximate coordinates and the season to refine which birds are likely nearby. You can still identify birds with location off.</p>
+    <p id="locationDetails" role="status"></p>
+    <div class="dialog-actions"><button class="button primary" id="findLocation">Use device location</button><button class="button secondary" id="clearLocation" hidden>Turn off</button></div>
+  </dialog>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>

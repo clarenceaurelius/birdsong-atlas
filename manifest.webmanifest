@@ -1,0 +1,15 @@
+{
+  "id": "./",
+  "name": "Birdsong Atlas",
+  "short_name": "Birdsong",
+  "description": "A mobile field recorder and sound explorer.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#0b1116",
+  "background_color": "#0b1116",
+  "icons": [
+    {"src":"./assets/icon.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"./assets/icon-large.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
