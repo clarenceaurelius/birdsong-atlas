@@ -13,10 +13,10 @@ const photos = {
 const players = new Audio();
 players.preload = 'auto';
 const preview = new Audio();
-let clip, previewUrl;
-const state = {id:0, recording:null, status:'demo', birds:demoBirds, selected:null, duration:0, source:'Demo soundscape', view:'manifold', manifold:'animated', animationPaused:window.matchMedia('(prefers-reduced-motion: reduce)').matches, coords:null, geoState:null};
+let clip, previewUrl, previewStart=null;
+const state = {id:0, recording:null, status:'demo', birds:demoBirds, selected:null, duration:0, source:'Demo soundscape', view:'manifold', manifold:'animated', coords:null, geoState:null};
 let dspWorker, modelWorker, objectUrl, playFrame, noticeTimer, locationVersion=0;
-const graph = createPlot($('visual'), inspectPoint, state.animationPaused);
+const graph = createPlot($('visual'), inspectPoint);
 
 function notice(message, error=false, persist=false) {
   clearTimeout(noticeTimer);
@@ -32,46 +32,53 @@ function clock(value, precise=false) {
   return Math.floor(time/60)+':'+seconds;
 }
 function selectedBird() {return state.birds.find(bird=>bird.sci===state.selected);}
-function wave() {drawWave($('wave'),state.signal,players.currentTime/Math.max(.001,state.duration),selectedBird()?.windows);}
+function playhead() {return previewStart===null ? players.currentTime : previewStart+preview.currentTime;}
+function wave() {drawWave($('wave'),state.signal,playhead()/Math.max(.001,state.duration),selectedBird()?.windows);}
 function renderTransport() {
-  const paused=players.paused;
+  const capturing=state.status==='recording';
+  const paused=players.paused && preview.paused;
+  const time=playhead();
   const label=paused?'Play audio':'Pause audio';
   if ($('play').ariaLabel!==label) {
     $('play').innerHTML=svg(paused?'play':'pause');
     $('play').ariaLabel=label;
     $('play').title=label;
   }
-  $('play').disabled=!state.signal;
-  $('seek').disabled=!state.signal;
-  $('replay').disabled=!state.signal;
+  $('play').disabled=capturing || !state.signal;
+  $('seek').disabled=capturing || !state.signal;
+  $('replay').disabled=capturing || !state.signal;
   $('seek').max=state.duration;
-  $('seek').value=players.currentTime || 0;
-  $('elapsed').textContent=clock(players.currentTime);
-  $('duration').textContent=clock(state.duration);
-  graph.time(players.currentTime,players.currentTime>0 || !paused,!paused);
+  $('seek').value=time || 0;
+  if (!capturing) $('elapsed').textContent=clock(time);
+  $('duration').textContent=capturing?'Live':clock(state.duration);
+  if (!capturing) graph.time(time,time>0 || !paused);
   wave();
 }
 function refreshPlay() {
   renderTransport();
-  if (!players.paused) playFrame=requestAnimationFrame(refreshPlay);
+  if (!players.paused || !preview.paused) playFrame=requestAnimationFrame(refreshPlay);
 }
-players.addEventListener('play',()=>{cancelAnimationFrame(playFrame);refreshPlay();});
-players.addEventListener('pause',()=>{cancelAnimationFrame(playFrame);renderTransport();});
-players.addEventListener('ended',()=>{
-  players.currentTime=0;
-  if (!state.animationPaused) graph.seek(state.duration);
-  renderTransport();
-});
+for (const audio of [players,preview]) {
+  audio.addEventListener('play',()=>{inspectPoint(null);cancelAnimationFrame(playFrame);refreshPlay();});
+  audio.addEventListener('pause',()=>{cancelAnimationFrame(playFrame);refreshPlay();});
+  audio.addEventListener('ended',renderTransport);
+}
 players.addEventListener('seeked',renderTransport);
-$('play').onclick=()=>players.paused ? players.play().catch(()=>notice('Playback could not start. Try playing again.',true)) : players.pause();
+$('play').onclick=()=>{
+  if (previewStart!==null) {stopClipPreview(true);return;}
+  if (!players.paused) {players.pause();return;}
+  if (players.ended) players.currentTime=0;
+  players.play().catch(()=>notice('Playback could not start. Try playing again.',true));
+};
 $('replay').onclick=()=>{
+  stopClipPreview();
   players.currentTime=0;
-  graph.seek(0);
   players.play().catch(()=>notice('Playback could not start. Try playing again.',true));
 };
 $('seek').oninput=()=>{
-  players.currentTime=+$('seek').value;
-  graph.seek(players.currentTime);
+  const target=+$('seek').value;
+  stopClipPreview();
+  players.currentTime=target;
   inspectPoint(null);
   renderTransport();
 };
@@ -87,14 +94,14 @@ function setRecording(signal, analysis) {
   }
   state.analysis=analysis;
   const top=graph.data(analysis);
-  if (signal) graph.seek(state.status==='demo' ? Math.min(4.7,state.duration*.4) : 0);
-  renderAnimationControl();
   $('rangeHigh').textContent=top/1000+' kHz';
   renderTransport();
 }
 function inspectPoint(index,spectralCell) {
   const point=$('point');
-  if (index==null || !state.analysis) {point.hidden=true;return;}
+  if (index==null || !state.analysis || state.recording) {
+    point.hidden=true;graph.inspect(null);return;
+  }
   const [time,rms,centroid,peak]=state.analysis.metadata.subarray(index*4,index*4+4);
   point.replaceChildren();
   const rows=spectralCell ? [clock(time,true),
@@ -109,11 +116,10 @@ function inspectPoint(index,spectralCell) {
   }
   for (const row of rows) {const div=document.createElement('div');div.textContent=row;point.append(div);}
   point.hidden=false;
+  stopClipPreview();
+  players.pause();
   if (state.signal) players.currentTime=Math.min(time,state.duration);
-  if (state.view==='calls' || (state.view==='manifold' && state.manifold==='animated')) {
-    graph.seek(time);
-    pauseAnimation(true,index);
-  }
+  graph.inspect(index);
   renderTransport();
 }
 function refreshSelection() {
@@ -126,6 +132,7 @@ function refreshSelection() {
 function renderResults() {
   $('count').textContent=state.birds.length;
   $('resultSubtitle').textContent=state.status==='demo' ? 'Illustrative detections in the demo' :
+    state.status==='recording' ? 'Microphone recording' :
     state.status==='review' ? 'Ready to analyze' :
     state.status==='analyzing' ? 'Analyzing your recording' :
     state.status==='failed' ? 'Bird identification unavailable' :
@@ -135,7 +142,7 @@ function renderResults() {
   if (!state.birds.length) {
     const empty=document.createElement('p');
     empty.className='empty';
-    empty.textContent=state.status==='review' ? 'Analyze your selection to identify birds.' : state.status==='analyzing' ? 'The sound explorer is ready as soon as the audio analysis finishes.' :
+    empty.textContent=state.status==='recording' ? 'Live PCA is shown while recording.' : state.status==='review' ? 'Analyze your selection to identify birds.' : state.status==='analyzing' ? 'The sound explorer is ready as soon as the audio analysis finishes.' :
       state.status==='failed' ? 'You can still play the audio and explore its shape. Try importing the file again when the model can be downloaded.' :
       'No species passed the confidence threshold in this recording.';
     list.append(empty);
@@ -157,7 +164,6 @@ function renderResults() {
       if (select && state.signal) players.currentTime=start;
       inspectPoint(null);
       refreshSelection();
-      if (select) graph.seek(start);
       renderTransport();
     };
     const photo=photos[bird.sci];
@@ -322,14 +328,22 @@ async function processAudio(blob,label) {
   if (signal.length<RATE*.2) {notice('That recording is too short. Try recording for at least three seconds.',true);return;}
   clip={signal,label,clipped,start:0,end:signal.length};
   reviewClip();
+  return true;
 }
-function stopClipPreview() {
+function stopClipPreview(hold=false) {
+  const wasPreviewing=previewStart!==null;
+  const time=playhead();
+  previewStart=null;
   preview.pause();
   if (!previewUrl) return;
   preview.removeAttribute('src');
   preview.load();
   URL.revokeObjectURL(previewUrl);
   previewUrl=null;
+  if (wasPreviewing && hold) {
+    players.currentTime=Math.min(time,state.duration);
+    renderTransport();
+  }
 }
 function drawClip() {
   if (state.status!=='review') return;
@@ -350,12 +364,16 @@ function reviewClip() {
   newSession('review',clip.label);
   $('vizHeading').title='';
   setRecording(clip.signal,null);
+  const id=state.id;
+  runDsp(clip.signal).catch(()=>{
+    if (id===state.id) notice('The recording is available, but its sound visualization could not be computed.',true);
+  });
   drawClip();
   notice(clip.clipped?'Reviewing the first 60 seconds of this file.':'');
   $('clipEditor').scrollIntoView({block:'nearest'});
 }
 function adjustClip(boundary,value) {
-  stopClipPreview();
+  stopClipPreview(true);
   const frame=Math.round(Number(value)), minimum=Math.round(.2*RATE);
   if (boundary==='start') clip.start=Math.max(0,Math.min(frame,clip.end-minimum));
   else clip.end=Math.min(clip.signal.length,Math.max(frame,clip.start+minimum));
@@ -364,23 +382,31 @@ function adjustClip(boundary,value) {
 $('clipStart').oninput=e=>adjustClip('start',e.currentTarget.value);
 $('clipEnd').oninput=e=>adjustClip('end',e.currentTarget.value);
 $('clipReset').onclick=()=>{
-  stopClipPreview();
+  stopClipPreview(true);
   clip.start=0;
   clip.end=clip.signal.length;
   drawClip();
 };
 $('clipPreview').onclick=()=>{
-  if (!preview.paused) {stopClipPreview();return;}
+  if (previewStart!==null) {stopClipPreview(true);return;}
   players.pause();
   stopClipPreview();
   previewUrl=URL.createObjectURL(makeWav(clip.signal.subarray(clip.start,clip.end)));
   preview.src=previewUrl;
-  preview.play().catch(()=>notice('Preview could not start. Try again.',true));
+  previewStart=clip.start/RATE;
+  const url=previewUrl;
+  preview.play().catch(()=>{
+    if (previewUrl!==url) return;
+    stopClipPreview(true);
+    notice('Preview could not start. Try again.',true);
+  });
 };
 preview.addEventListener('play',()=>{$('clipPreview').textContent='Stop preview';});
-preview.addEventListener('pause',()=>{$('clipPreview').textContent='Replay selection';});
-preview.addEventListener('ended',stopClipPreview);
-players.addEventListener('play',stopClipPreview);
+preview.addEventListener('pause',()=>{
+  $('clipPreview').textContent='Replay selection';
+  if (preview.paused && !preview.ended && previewStart!==null) stopClipPreview(true);
+});
+preview.addEventListener('ended',()=>stopClipPreview(true));
 $('editClip').onclick=reviewClip;
 $('clipAnalyze').onclick=()=>{
   const {signal,label,clipped,start,end}=clip;
@@ -410,6 +436,53 @@ $('file').onchange=()=>{
   if (file.size>150*1024*1024) {notice('Choose an audio file under 150 MB.',true);return;}
   processAudio(file,'Imported audio');
 };
+function startLivePca(context,stream,capture) {
+  let worker,source,tap,closed=false;
+  function close() {
+    if (closed) return;
+    closed=true;
+    worker?.terminate();
+    if (tap) {tap.port.onmessage=null;tap.disconnect();}
+    source?.disconnect();
+    if (context && context.state!=='closed') context.close().catch(()=>{});
+  }
+  function unavailable() {
+    if (closed) return;
+    close();
+    if (state.recording===capture) {
+      $('vizSubtitle').textContent='Live PCA unavailable';
+      notice('Recording is active. Live visualization is unavailable in this browser.',true,true);
+    }
+  }
+  async function connect() {
+    if (!context?.audioWorklet || !window.AudioWorkletNode || typeof Worker==='undefined') {
+      unavailable();
+      return;
+    }
+    await context.audioWorklet.addModule(new URL('./mic-worklet.js',import.meta.url));
+    if (closed) return;
+    worker=new Worker(new URL('./dsp-worker.mjs',import.meta.url),{type:'module'});
+    worker.onerror=unavailable;
+    worker.onmessage=({data})=>{
+      if (closed || state.recording!==capture) return;
+      if (data.error) {unavailable();return;}
+      const result=data.result;
+      state.analysis=result;
+      $('rangeHigh').textContent=graph.data(result)/1000+' kHz';
+      $('elapsed').textContent=clock(result.time);
+      graph.time(result.time,true);
+    };
+    worker.postMessage({inputRate:context.sampleRate});
+    tap=new AudioWorkletNode(context,'birdsong-microphone');
+    tap.onprocessorerror=unavailable;
+    tap.port.onmessage=({data})=>worker.postMessage({live:data},[data.buffer]);
+    source=context.createMediaStreamSource(stream);
+    source.connect(tap).connect(context.destination);
+    await context.resume();
+  }
+  connect().catch(unavailable);
+  return close;
+}
 $('record').onclick=async()=>{
   if (state.recording) {if (state.recording.recorder.state==='recording') state.recording.recorder.stop();return;}
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -417,32 +490,62 @@ $('record').onclick=async()=>{
     return;
   }
   $('record').disabled=true;
-  let stream;
+  let stream,context;
   try {
+    const AudioContext=window.AudioContext || window.webkitAudioContext;
+    if (AudioContext) {
+      try {
+        context=new AudioContext();
+        context.resume().catch(()=>{});
+      } catch {context=null;}
+    }
     stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
     players.pause();
     stopClipPreview();
     const recorder=new MediaRecorder(stream);
     const parts=[];
     const started=Date.now();
-    let tick;
+    const capture={recorder};
+    let tick,finished=false;
     const stopUI=()=>{
+      if (finished) return false;
+      finished=true;
       clearInterval(tick);
+      capture.stopLive?.();
       stream.getTracks().forEach(track=>track.stop());
       state.recording=null;
       $('record').classList.remove('recording');
       $('record').innerHTML=svg('mic')+'<span>Record</span>';
       $('upload').disabled=false;$('loadDemo').disabled=false;
+      viewButtons.forEach(button=>button.disabled=false);
+      setView(state.view);
+      return true;
     };
     recorder.ondataavailable=e=>{if (e.data.size) parts.push(e.data);};
-    recorder.onerror=()=>{stopUI();notice('Microphone recording stopped unexpectedly. Try again or import audio.',true);};
-    recorder.onstop=()=>{
-      stopUI();
-      if (parts.length) processAudio(new Blob(parts,{type:recorder.mimeType}),'Microphone recording');
-      else notice('The microphone did not capture any audio. Try again.',true);
+    recorder.onerror=()=>{
+      if (!stopUI()) return;
+      newSession('failed','Microphone');
+      notice('Microphone recording stopped unexpectedly. Try again or import audio.',true);
+    };
+    recorder.onstop=async()=>{
+      if (!stopUI()) return;
+      const id=state.id;
+      if (parts.length && await processAudio(new Blob(parts,{type:recorder.mimeType}),'Microphone recording')) return;
+      if (id!==state.id) return;
+      newSession('failed','Microphone');
+      if (!parts.length) notice('The microphone did not capture any audio. Try again.',true);
     };
     recorder.start();
-    state.recording={recorder};
+    state.recording=capture;
+    newSession('recording','Live microphone');
+    state.signal=null;
+    state.duration=0;
+    setRecording(null,null);
+    setView('manifold');
+    setManifold('animated');
+    viewButtons.forEach(button=>button.disabled=button.dataset.view!=='manifold');
+    $('editClip').hidden=true;
+    $('elapsed').textContent='0:00';
     $('record').classList.add('recording');
     $('upload').disabled=true;$('loadDemo').disabled=true;
     const update=()=>{
@@ -452,24 +555,14 @@ $('record').onclick=async()=>{
     };
     update();tick=setInterval(update,250);
     notice('Listening. Tap Stop to review your recording.',false,true);
+    capture.stopLive=startLivePca(context,stream,capture);
   } catch(error) {
+    if (context && context.state!=='closed') context.close().catch(()=>{});
     stream?.getTracks().forEach(track=>track.stop());
     notice(error.name==='NotAllowedError'?'Microphone permission is off. You can enable it in your browser or import audio.':'The microphone is unavailable. You can import an audio file instead.',true);
   } finally {$('record').disabled=false;}
 };
 const descriptions={manifold:'40 MFCCs → 3 principal components',calls:'Frequency × level × frequency slope',spectrogram:'Time × frequency × spectral level',pitch:'Mel spectrogram and dominant frequency',energy:'Relative RMS amplitude over time'};
-function renderAnimationControl() {
-  const control=$('animationControl');
-  control.hidden=state.view!=='calls' && state.manifold!=='animated';
-  control.disabled=!state.analysis;
-  const label=state.animationPaused?'Resume animation':'Pause animation';
-  control.innerHTML=svg(state.animationPaused?'play':'pause')+'<span>'+label+'</span>';
-}
-function pauseAnimation(paused,index) {
-  state.animationPaused=paused;
-  graph.pauseAnimation(paused,index);
-  renderAnimationControl();
-}
 function describePlot() {
   if (state.view==='calls') {
     $('visual').ariaLabel='3D call trails. Frequency in kilohertz, level in dBFS, and slope in kilohertz per second. Use arrow keys to rotate or press Enter to inspect a recent peak.';
@@ -481,43 +574,41 @@ function describePlot() {
   }
   $('visual').ariaLabel=state.view!=='manifold'
     ? descriptions[state.view]+'. Click to inspect a frame.'
+    : state.recording
+      ? 'Live 3D PCA of microphone audio. Use arrow keys to rotate.'
     : state.manifold==='animated'
       ? 'Fading 3D sound trail. Use arrow keys to rotate or press Enter to inspect the current node.'
       : 'Complete 3D sound trajectory. Use arrow keys to rotate or click a point to inspect it.';
 }
 const manifoldButtons=document.querySelectorAll('[data-manifold]');
-manifoldButtons.forEach(button=>button.onclick=()=>{
-  state.manifold=button.dataset.manifold;
-  manifoldButtons.forEach(item=>item.ariaPressed=String(item===button));
+const viewButtons=document.querySelectorAll('[data-view]');
+function setManifold(mode) {
+  state.manifold=mode;
+  manifoldButtons.forEach(item=>item.ariaPressed=String(item.dataset.manifold===mode));
   inspectPoint(null);
-  renderAnimationControl();
   describePlot();
-  graph.manifold(state.manifold);
-});
-$('animationControl').onclick=()=>{
-  if (state.animationPaused) inspectPoint(null);
-  pauseAnimation(!state.animationPaused);
-};
-document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{
-  state.view=button.dataset.view;
+  graph.manifold(mode);
+}
+manifoldButtons.forEach(button=>button.onclick=()=>setManifold(button.dataset.manifold));
+function setView(view) {
+  state.view=view;
   const spectrogram=state.view==='spectrogram';
   const calls=state.view==='calls';
   const spatial=state.view==='manifold' || spectrogram || calls;
-  document.querySelectorAll('[data-view]').forEach(item=>item.ariaPressed=String(item===button));
-  $('vizSubtitle').textContent=descriptions[state.view];
+  viewButtons.forEach(item=>item.ariaPressed=String(item.dataset.view===view));
+  $('vizSubtitle').textContent=state.recording?'Live PCA · 5.5 s rolling window':descriptions[state.view];
   $('plotHint').hidden=!spatial;
   $('legend').hidden=spectrogram || calls;
   $('spectrumLegend').hidden=!spectrogram;
   $('callLegend').hidden=!calls;
   $('plot').dataset.view=state.view;
-  $('manifoldControls').hidden=state.view!=='manifold' && !calls;
-  $('manifoldOptions').hidden=calls;
-  renderAnimationControl();
+  $('manifoldControls').hidden=state.view!=='manifold';
   describePlot();
   $('visual').style.touchAction=spatial?'none':'pan-y';
   inspectPoint(null);
   graph.view(state.view);
-});
+}
+viewButtons.forEach(button=>button.onclick=()=>setView(button.dataset.view));
 $('reset').onclick=()=>{inspectPoint(null);graph.reset();};
 function expand() {
   const expanded=$('explorer').classList.toggle('expanded');
@@ -557,7 +648,6 @@ Object.values(photos).forEach((photo,index)=>{
   credits.append(link,' (',license,')');
 });
 route();
-renderAnimationControl();
 renderTransport();
 loadDemo();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('./sw.js').catch(()=>{});

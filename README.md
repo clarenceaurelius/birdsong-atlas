@@ -18,7 +18,7 @@ Choose **Record**, then **Stop**, or use **Import audio**. Set the start and end
 
 The opening soundscape uses synthesized audio and illustrative detections. Select a species to highlight the time windows that support the detection. These windows still contain the original mixed audio. Drag or pinch the 3D plot and tap a point to inspect its frame metadata and seek to the corresponding time.
 
-The 3D manifold opens in **Animated** mode. The connected trail fades over 5.5 seconds. Nodes swell when a similar dominant frequency returns after a gap or change in pitch. The animation previews the recording silently and follows the playhead during playback. Use **Pause animation** to hold the trail or **Complete** to see the entire trajectory at once. The animation starts paused if your device requests reduced motion.
+The 3D manifold opens in **Animated** mode. When you record, live PCA updates over the latest 5.5 seconds of microphone audio. During playback, the connected trail follows the audio playhead and holds when audio pauses or ends. Nodes swell when a similar dominant frequency returns after a gap or change in pitch. Choose **Complete** to see the entire trajectory at once.
 
 ## Method and credits
 

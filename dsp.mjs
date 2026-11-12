@@ -105,17 +105,18 @@ function pitchRecurrence(metadata, tonalShare, maxRms) {
   return scores;
 }
 
-export function projectPca(matrix, rowCount, dims = MFCC_COUNT) {
+export function projectPca(matrix, rowCount, dims = MFCC_COUNT, priorBasis) {
   const mean = new Float64Array(dims);
   for (let row = 0; row < rowCount; row++) {
     for (let j = 0; j < dims; j++) mean[j] += matrix[row * dims + j] / rowCount;
   }
   const cov = Array.from({length:dims}, () => new Float64Array(dims));
   const centered = new Float64Array(dims);
+  const normalization=1/Math.max(1,rowCount-1);
   for (let row = 0; row < rowCount; row++) {
     for (let j = 0; j < dims; j++) centered[j] = matrix[row * dims + j] - mean[j];
     for (let j = 0; j < dims; j++) {
-      for (let k = 0; k <= j; k++) cov[j][k] += centered[j] * centered[k] / Math.max(1, rowCount - 1);
+      for (let k = 0; k <= j; k++) cov[j][k] += centered[j] * centered[k] * normalization;
     }
   }
   for (let j = 0; j < dims; j++) for (let k = 0; k < j; k++) cov[k][j] = cov[j][k];
@@ -140,7 +141,8 @@ export function projectPca(matrix, rowCount, dims = MFCC_COUNT) {
       if (aligned) break;
     }
     const largest = vector.reduce((index, v, i) => Math.abs(v) > Math.abs(vector[index]) ? i : index, 0);
-    if (vector[largest] < 0) vector = vector.map(v => -v);
+    const reference=priorBasis ? dot(vector,priorBasis[axis]) : vector[largest];
+    if (reference < 0) vector = vector.map(v => -v);
     vectors.push(vector);
     variances.push(Math.max(0, dot(vector, Float64Array.from(cov, row => dot(row, vector)))));
   }
@@ -149,7 +151,79 @@ export function projectPca(matrix, rowCount, dims = MFCC_COUNT) {
     for (let j = 0; j < dims; j++) centered[j] = matrix[row * dims + j] - mean[j];
     vectors.forEach((vector, axis) => { coords[row * 3 + axis] = dot(vector, centered); });
   }
-  return {coords, explained: trace ? variances.map(v => v / trace) : [0, 0, 0]};
+  return {coords, explained: trace ? variances.map(v => v / trace) : [0, 0, 0], basis:vectors};
+}
+
+function writeMelBands(power,bands,offset=0) {
+  for (let m=0;m<MEL_COUNT;m++) {
+    let sum=0;
+    for (const [bin,weight] of melBank[m]) sum+=power[bin]*weight;
+    bands[offset+m]=Math.log(Math.max(sum,1e-8));
+  }
+}
+
+function writeMfcc(bands,bandOffset,mfcc,offset=0) {
+  for (let c=0;c<MFCC_COUNT;c++) {
+    let sum=0;
+    for (let m=0;m<MEL_COUNT;m++) sum+=bands[bandOffset+m]*dct[c][m];
+    mfcc[offset+c]=sum;
+  }
+}
+
+export function createLivePca(inputRate) {
+  const frames=[];
+  const real=new Float64Array(FFT_SIZE), imag=new Float64Array(FFT_SIZE);
+  const power=new Float64Array(FFT_SIZE/2+1), bands=new Float32Array(MEL_COUNT);
+  let pending=new Float32Array(FFT_SIZE/2), frameCount=0, basis;
+  let inputCount=0, sampleAt=0, previousSample=0;
+  const maxFrames=Math.ceil(TRAIL_SECONDS*RATE/HOP)+1;
+  return input=>{
+    let samples=input;
+    if (inputRate!==RATE) {
+      const step=inputRate/RATE, end=inputCount+input.length;
+      samples=new Float32Array(Math.ceil(input.length/step)+2);
+      let count=0;
+      while (sampleAt<end-1) {
+        const index=Math.floor(sampleAt), fraction=sampleAt-index;
+        const left=index<inputCount ? previousSample : input[index-inputCount];
+        const right=input[index+1-inputCount];
+        samples[count++]=left+(right-left)*fraction;
+        sampleAt+=step;
+      }
+      previousSample=input.at(-1);
+      inputCount=end;
+      samples=samples.subarray(0,count);
+    }
+    const block=new Float32Array(pending.length+samples.length);
+    block.set(pending);
+    block.set(samples,pending.length);
+    let offset=0;
+    for (;offset+FFT_SIZE<=block.length;offset+=HOP) {
+      const {rms,centroid,peak,tonalShare}=spectrum(block,offset,real,imag,power);
+      writeMelBands(power,bands);
+      const mfcc=new Float32Array(MFCC_COUNT);
+      writeMfcc(bands,0,mfcc);
+      frames.push({mfcc,rms,centroid,peak,tonalShare});
+      frameCount++;
+    }
+    pending=block.slice(offset);
+    if (!offset) return null;
+    if (frames.length>maxFrames) frames.splice(0,frames.length-maxFrames);
+    const n=frames.length, frameOffset=frameCount-n;
+    const matrix=new Float32Array(n*MFCC_COUNT), metadata=new Float32Array(n*4), tonal=new Float32Array(n);
+    let maxRms=0, maxCentroid=0;
+    frames.forEach(({mfcc,rms,centroid,peak,tonalShare},i)=>{
+      matrix.set(mfcc,i*MFCC_COUNT);
+      metadata.set([(frameOffset+i)*HOP/RATE,rms,centroid,peak],i*4);
+      tonal[i]=tonalShare;
+      maxRms=Math.max(maxRms,rms);
+      maxCentroid=Math.max(maxCentroid,centroid);
+    });
+    const projected=projectPca(matrix,n,MFCC_COUNT,basis);
+    basis=projected.basis;
+    return {n,frameOffset,coords:projected.coords,metadata,maxRms,maxCentroid,
+      recurrence:pitchRecurrence(metadata,tonal,maxRms),time:(frameCount-1)*HOP/RATE};
+  };
 }
 
 export function analyze(signal) {
@@ -173,21 +247,17 @@ export function analyze(signal) {
     tonal[frame] = tonalShare;
     maxRms = Math.max(maxRms, rms);
     maxCentroid = Math.max(maxCentroid, centroid);
-    for (let m = 0; m < MEL_COUNT; m++) {
-      let sum = 0;
-      for (const [bin, weight] of melBank[m]) sum += power[bin] * weight;
-      const value = Math.log(Math.max(sum, 1e-8));
-      bands[frame * MEL_COUNT + m] = value;
+    const bandOffset=frame*MEL_COUNT;
+    writeMelBands(power,bands,bandOffset);
+    for (let m=0;m<MEL_COUNT;m++) {
+      const value=bands[bandOffset+m];
       minBand = Math.min(minBand, value);
       maxBand = Math.max(maxBand, value);
     }
-    for (let c = 0; c < MFCC_COUNT; c++) {
-      let sum = 0;
-      for (let m = 0; m < MEL_COUNT; m++) sum += bands[frame * MEL_COUNT + m] * dct[c][m];
-      mfcc[frame * MFCC_COUNT + c] = sum;
-    }
+    writeMfcc(bands,bandOffset,mfcc,frame*MFCC_COUNT);
   }
-  return {n, duration:signal.length/RATE, spectralLevels, ...projectPca(mfcc, n), metadata, mfcc, bands, recurrence: pitchRecurrence(metadata,tonal,maxRms), maxRms, minBand, maxBand,
+  const {coords,explained}=projectPca(mfcc,n);
+  return {n, duration:signal.length/RATE, spectralLevels, coords, explained, metadata, mfcc, bands, recurrence: pitchRecurrence(metadata,tonal,maxRms), maxRms, minBand, maxBand,
     maxCentroid, bandHz: edges.slice(1, -1),
     callTracks:trackCalls(spectralLevels,n,SPECTRUM_BINS,SPECTRUM_BIN_HZ,SPECTRUM_MIN_DB,HOP/RATE)};
 }

@@ -21,28 +21,10 @@ main{max-width:1440px;margin:auto;padding:0 clamp(22px,4.8vw,72px) 36px}.intro{p
   background: #0e181e;
 }
 .manifold-controls .segments button { padding-inline: 12px; }
-.animation-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-height: 34px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.animation-control:hover { color: var(--mint); background: #1b302e; }
-.animation-control svg { width: 14px; height: 14px; }
 @media (max-width: 480px) {
   .manifold-controls { padding: 5px 10px; }
   .manifold-controls .segments { width: auto; }
   .manifold-controls .segments button { min-height: 33px; padding-inline: 9px; }
-  .animation-control { min-height: 41px; }
 }
 
 .plot[data-view="manifold"] {

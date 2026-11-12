@@ -63,7 +63,7 @@ function poolSpectrum(data, columns, rows) {
   return cells;
 }
 
-export function createPlot(canvas, onPick, startPaused = false) {
+export function createPlot(canvas, onPick) {
   let data, selected = null, mode = 'manifold', currentTime = 0, showingPlayhead = false, pending = 0;
   const cameraDefaults = {
     manifold:{yaw:-.47,pitch:-.37,zoom:1},
@@ -75,36 +75,22 @@ export function createPlot(canvas, onPick, startPaused = false) {
   let camera = manifoldCamera, scale = 1, maxCentroid = 8000, peakMax = 10000;
   let hit = [], pointerStart = null, pinched = false, raster, completeLayer;
   let spectralGrid, spectralLayer;
-  let manifold = 'animated', animationPaused = startPaused, audioPlaying = false;
-  let previewTime = 0, previousTick = null, inspectedFrame = null, trailHead = null;
+  let manifold = 'animated', inspectedFrame = null, trailHead = null;
   const pointers = new Map();
   const is3d = () => Boolean(cameras[mode]);
   const usesSpectralPeaks = () => mode==='spectrogram' || mode==='calls';
   const highlight = time => !selected || selected.some(([start,end]) => time >= start && time <= end);
-  const frameAt = time => clamp(Math.round(time * FRAMES_PER_SECOND),0,data.n-1);
-  function nextPreviewTime(time) {
-    const duration = data.n / FRAMES_PER_SECOND;
-    const at = time >= duration+TRAIL_SECONDS ? 0 : time;
-    if (!selected?.length || selected.some(([start,end]) => at >= start && at < end+TRAIL_SECONDS)) return at;
-    return selected.find(([start]) => start > at)?.[0] ?? selected[0][0];
-  }
-  function draw(now) {
+  const frameAt = time => clamp(Math.round(time * FRAMES_PER_SECOND)-(data.frameOffset??0),0,data.n-1);
+  function draw() {
     pending = 0;
     const area = fit(canvas);
     hit = [];
     trailHead = null;
-    if (!area || !data) { previousTick = null; return; }
-    const animated = mode==='calls' || (mode==='manifold' && manifold==='animated');
-    const preview = animated && !animationPaused && !audioPlaying;
-    if (preview && previousTick !== null) {
-      previewTime = nextPreviewTime(previewTime + Math.min(.1,(now-previousTick)/1000));
-    }
-    previousTick = preview ? now : null;
+    if (!area || !data) return;
     if (mode === 'calls') drawCallTrails(area);
     else if (mode === 'spectrogram') drawSpectrogram(area);
     else if (mode === 'manifold') draw3d(area);
     else draw2d(area);
-    if (preview) invalidate();
   }
   function invalidate() { pending ||= requestAnimationFrame(draw); }
   function redrawProjection() {
@@ -154,13 +140,13 @@ export function createPlot(canvas, onPick, startPaused = false) {
     }
     ctx.textAlign='start';
     const step=w<440 ? 4 : 3;
-    const last=Math.min(data.n-1,Math.floor(previewTime*FRAMES_PER_SECOND+1e-6));
-    const start=Math.max(0,Math.ceil((previewTime-TRAIL_SECONDS)*FRAMES_PER_SECOND/step)*step);
+    const last=Math.min(data.n-1,Math.floor(currentTime*FRAMES_PER_SECOND+1e-6));
+    const start=Math.max(0,Math.ceil((currentTime-TRAIL_SECONDS)*FRAMES_PER_SECOND/step)*step);
     const prior=new Map();
     const nodes=[];
     for (let frame=Math.min(start,last);frame>=0 && frame<=last;frame=Math.min(frame+step,last)) {
       const time=frame/FRAMES_PER_SECOND;
-      const age=Math.max(0,previewTime-time);
+      const age=Math.max(0,currentTime-time);
       const fade=clamp(1-age/TRAIL_SECONDS,0,1)**1.45;
       if (fade>.02 && highlight(time)) {
         for (let i=tracks.offsets[frame];i<tracks.offsets[frame+1];i++) {
@@ -326,14 +312,15 @@ export function createPlot(canvas, onPick, startPaused = false) {
   }
   function drawTrail(ctx,p,w,h) {
     const step = w<440 ? 3 : 2;
-    const first = Math.max(0,Math.ceil((previewTime-TRAIL_SECONDS)*FRAMES_PER_SECOND/step)*step);
-    const last = Math.min(data.n-1,Math.floor(previewTime*FRAMES_PER_SECOND+1e-6));
+    const frameOffset=data.frameOffset??0;
+    const first = Math.max(0,Math.ceil(((currentTime-TRAIL_SECONDS)*FRAMES_PER_SECOND-frameOffset)/step)*step);
+    const last = Math.min(data.n-1,Math.floor(currentTime*FRAMES_PER_SECOND+1e-6)-frameOffset);
     const points = [];
     let previous, latest;
     for (let i=first;i<=last;i+=step) {
       const point = projectFrame(i,p,w,h);
       if (!point?.visible) { previous=null; continue; }
-      const age = Math.max(0,previewTime-i/FRAMES_PER_SECOND);
+      const age = Math.max(0,currentTime-(frameOffset+i)/FRAMES_PER_SECOND);
       const opacity = clamp(1-age/TRAIL_SECONDS,0,1) ** 1.7;
       const strength = data.recurrence?.[i] || 0;
       const swell = i%12===0 ? Math.min(1,strength/2.2)*(1-Math.exp(-age/.15)) : 0;
@@ -359,7 +346,7 @@ export function createPlot(canvas, onPick, startPaused = false) {
       if (a.swell>.32) circle(ctx,a.x-a.radius*.18,a.y-a.radius*.21,a.radius*.37,'rgba(255,246,222,'+(.65*a.opacity*a.swell)+')');
     }
     const head = projectFrame(Math.max(0,last),p,w,h);
-    const headAge = previewTime-last/FRAMES_PER_SECOND;
+    const headAge = currentTime-(frameOffset+last)/FRAMES_PER_SECOND;
     if (head?.visible && last>=0 && headAge<.18) {
       const glow=1-headAge/.18;
       if (latest && last-latest.i<=step && latest.i!==last) line(ctx,latest,head,rgb(head.c,.65*glow),1.1);
@@ -480,7 +467,7 @@ export function createPlot(canvas, onPick, startPaused = false) {
     if (e.key==='Enter' || e.key===' ') {
       e.preventDefault();
       if (data && usesSpectralPeaks()) {
-        const frame=frameAt(mode==='calls'?previewTime:currentTime);
+        const frame=frameAt(currentTime);
         const point=hit.reduce((best,cell)=>{
           if (!best) return cell;
           const distance=Math.abs(cell.i-frame), nearest=Math.abs(best.i-frame);
@@ -501,10 +488,8 @@ export function createPlot(canvas, onPick, startPaused = false) {
       data=next;
       raster=null;
       spectralGrid=null;
-      previousTick=null;
       inspectedFrame=null;
       if (next) {
-        previewTime=nextPreviewTime(currentTime);
         const magnitudes=Array.from({length:next.n},(_,i)=>Math.hypot(...next.coords.subarray(i*3,i*3+3))).sort((a,b)=>a-b);
         scale=Math.max(1,magnitudes[Math.floor((magnitudes.length-1)*.992)] / 1.08);
         maxCentroid=Math.max(1000,Math.ceil(next.maxCentroid/1000)*1000);
@@ -513,16 +498,9 @@ export function createPlot(canvas, onPick, startPaused = false) {
       redrawProjection();
       return maxCentroid;
     },
-    view(next) {mode=next;camera=cameras[next]??manifoldCamera;previousTick=null;invalidate();},
-    manifold(next) {manifold=next;previousTick=null;invalidate();},
-    pauseAnimation(paused,index = null) {
-      animationPaused=paused;
-      inspectedFrame=paused ? index : null;
-      previousTick=null;
-      if (!paused && audioPlaying) previewTime=currentTime;
-      if (!paused && !audioPlaying && data) previewTime=nextPreviewTime(previewTime);
-      invalidate();
-    },
+    view(next) {mode=next;camera=cameras[next]??manifoldCamera;invalidate();},
+    manifold(next) {manifold=next;invalidate();},
+    inspect(index) {inspectedFrame=index;invalidate();},
     reset() {
       Object.assign(camera,cameraDefaults[mode]??cameraDefaults.manifold);
       redrawProjection();
@@ -531,21 +509,11 @@ export function createPlot(canvas, onPick, startPaused = false) {
       if (selected===windows) return;
       selected=windows;
       inspectedFrame=null;
-      if (data && !audioPlaying) previewTime=nextPreviewTime(previewTime);
       redrawProjection();
     },
-    seek(t) {
-      previousTick=null;
-      previewTime=t;
-      inspectedFrame=animationPaused && data ? frameAt(t) : null;
-      if (data && !audioPlaying && !animationPaused) previewTime=nextPreviewTime(t);
-      invalidate();
-    },
-    time(t,visible,playing = false) {
+    time(t,visible) {
       currentTime=t;
       showingPlayhead=visible;
-      audioPlaying=playing;
-      if (playing && !animationPaused) previewTime=t;
       invalidate();
     }
   };
