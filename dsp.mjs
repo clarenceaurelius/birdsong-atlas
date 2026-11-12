@@ -1,9 +1,14 @@
 export const RATE = 48000;
 const FFT_SIZE = 2048, HOP = 480, MEL_COUNT = 64, MFCC_COUNT = 40;
 export const TRAIL_SECONDS = 5.5;
+export const SPECTRUM_MAX_HZ = 16000;
+export const SPECTRUM_BIN_HZ = RATE / FFT_SIZE;
+export const SPECTRUM_MIN_DB = -100;
+export const SPECTRUM_BINS = Math.floor(SPECTRUM_MAX_HZ / SPECTRUM_BIN_HZ) + 1;
 const PITCH_RATIO = 2 ** (.85 / 12);
 const TAU = 2 * Math.PI;
 const hann = Float64Array.from({length: FFT_SIZE}, (_, i) => .5 - .5 * Math.cos(TAU * i / (FFT_SIZE - 1)));
+const fftAmplitudeScale = 2 / hann.reduce((sum,value)=>sum+value,0);
 const dct = Array.from({length: MFCC_COUNT}, (_, k) => Float64Array.from({length: MEL_COUNT}, (_, j) =>
   Math.cos(Math.PI * k * (j + .5) / MEL_COUNT) * Math.sqrt((k ? 2 : 1) / MEL_COUNT)));
 const toMel = hz => 2595 * Math.log10(1 + hz / 700);
@@ -149,6 +154,7 @@ export function analyze(signal) {
   const n = Math.max(1, Math.ceil(signal.length / HOP));
   const mfcc = new Float32Array(n * MFCC_COUNT);
   const bands = new Float32Array(n * MEL_COUNT);
+  const spectralLevels = new Uint8Array(n * SPECTRUM_BINS);
   const metadata = new Float32Array(n * 4);
   const tonal = new Float32Array(n);
   const real = new Float64Array(FFT_SIZE), imag = new Float64Array(FFT_SIZE);
@@ -156,6 +162,11 @@ export function analyze(signal) {
   let maxRms = 0, minBand = Infinity, maxBand = -Infinity, maxCentroid = 0;
   for (let frame = 0; frame < n; frame++) {
     const {rms, centroid, peak, tonalShare} = spectrum(signal, frame * HOP - FFT_SIZE / 2, real, imag, power);
+    for (let bin=0;bin<SPECTRUM_BINS;bin++) {
+      const amplitude=Math.sqrt(power[bin])*fftAmplitudeScale*(bin===0 ? .5 : 1);
+      const level=20*Math.log10(amplitude);
+      spectralLevels[frame*SPECTRUM_BINS+bin]=Math.round(Math.max(SPECTRUM_MIN_DB,Math.min(0,level))-SPECTRUM_MIN_DB);
+    }
     metadata.set([frame * HOP / RATE, rms, centroid, peak], frame * 4);
     tonal[frame] = tonalShare;
     maxRms = Math.max(maxRms, rms);
@@ -174,7 +185,7 @@ export function analyze(signal) {
       mfcc[frame * MFCC_COUNT + c] = sum;
     }
   }
-  return {n, ...projectPca(mfcc, n), metadata, mfcc, bands, recurrence: pitchRecurrence(metadata,tonal,maxRms), maxRms, minBand, maxBand,
+  return {n, duration:signal.length/RATE, spectralLevels, ...projectPca(mfcc, n), metadata, mfcc, bands, recurrence: pitchRecurrence(metadata,tonal,maxRms), maxRms, minBand, maxBand,
     maxCentroid, bandHz: edges.slice(1, -1)};
 }
 

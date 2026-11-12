@@ -97,3 +97,14 @@ main{max-width:1440px;margin:auto;padding:0 clamp(22px,4.8vw,72px) 36px}.intro{p
   #clipAnalyze { flex-basis: 100%; }
   .transport { gap: 6px; }
 }
+
+.panel-top { flex-wrap: wrap; }
+.spectrum-legend .gradient {
+  background: linear-gradient(90deg,#1c1f37,#504ca9,#36aad0,#64eabe,#ffd873);
+}
+.spectrum-legend { top: 57px; bottom: auto; }
+@media (max-width: 420px) {
+  .panel-top .segments { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .panel-top .segments button { min-height: 40px; }
+  .plot[data-view="spectrogram"] .plot-hint { max-width: calc(100% - 106px); }
+}

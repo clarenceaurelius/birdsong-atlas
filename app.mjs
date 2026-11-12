@@ -92,15 +92,17 @@ function setRecording(signal, analysis) {
   $('rangeHigh').textContent=top/1000+' kHz';
   renderTransport();
 }
-function inspectPoint(index) {
+function inspectPoint(index,spectralCell) {
   const point=$('point');
   if (index==null || !state.analysis) {point.hidden=true;return;}
   const [time,rms,centroid,peak]=state.analysis.metadata.subarray(index*4,index*4+4);
   point.replaceChildren();
-  const rows=[clock(time,true)+' · '+(20*Math.log10(Math.max(rms,.000001))).toFixed(1)+' dBFS RMS',
+  const rows=spectralCell ? [clock(time,true),
+    (spectralCell.hz/1000).toFixed(2)+' kHz · '+spectralCell.db+' dBFS'] :
+    [clock(time,true)+' · '+(20*Math.log10(Math.max(rms,.000001))).toFixed(1)+' dBFS RMS',
     'Centroid '+(centroid/1000).toFixed(2)+' kHz',
     'Dominant '+(peak/1000).toFixed(2)+' kHz'];
-  if (state.analysis.recurrence?.[index] >= .4) rows.push('Similar frequency heard recently');
+  if (!spectralCell && state.analysis.recurrence?.[index] >= .4) rows.push('Similar frequency heard recently');
   for (const row of rows) {const div=document.createElement('div');div.textContent=row;point.append(div);}
   point.hidden=false;
   if (state.signal) players.currentTime=Math.min(time,state.duration);
@@ -451,7 +453,7 @@ $('record').onclick=async()=>{
     notice(error.name==='NotAllowedError'?'Microphone permission is off. You can enable it in your browser or import audio.':'The microphone is unavailable. You can import an audio file instead.',true);
   } finally {$('record').disabled=false;}
 };
-const descriptions={manifold:'40 MFCCs → 3 principal components',pitch:'Mel spectrogram and dominant frequency',energy:'Relative RMS amplitude over time'};
+const descriptions={manifold:'40 MFCCs → 3 principal components',spectrogram:'Time × frequency × spectral level',pitch:'Mel spectrogram and dominant frequency',energy:'Relative RMS amplitude over time'};
 function renderAnimationControl() {
   const control=$('animationControl');
   control.hidden=state.manifold!=='animated';
@@ -465,6 +467,10 @@ function pauseAnimation(paused,index) {
   renderAnimationControl();
 }
 function describePlot() {
+  if (state.view==='spectrogram') {
+    $('visual').ariaLabel='3D spectrogram. Time in seconds, frequency in kilohertz, spectral level in dBFS. Use arrow keys to rotate or press Enter to inspect a peak near the playhead.';
+    return;
+  }
   $('visual').ariaLabel=state.view!=='manifold'
     ? descriptions[state.view]+'. Click to inspect a frame.'
     : state.manifold==='animated'
@@ -486,13 +492,17 @@ $('animationControl').onclick=()=>{
 };
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{
   state.view=button.dataset.view;
+  const spectrogram=state.view==='spectrogram';
+  const spatial=state.view==='manifold' || spectrogram;
   document.querySelectorAll('[data-view]').forEach(item=>item.ariaPressed=String(item===button));
   $('vizSubtitle').textContent=descriptions[state.view];
-  $('plotHint').hidden=state.view!=='manifold';
+  $('plotHint').hidden=!spatial;
+  $('legend').hidden=spectrogram;
+  $('spectrumLegend').hidden=!spectrogram;
   $('plot').dataset.view=state.view;
   $('manifoldControls').hidden=state.view!=='manifold';
   describePlot();
-  $('visual').style.touchAction=state.view==='manifold'?'none':'pan-y';
+  $('visual').style.touchAction=spatial?'none':'pan-y';
   inspectPoint(null);
   graph.view(state.view);
 });
