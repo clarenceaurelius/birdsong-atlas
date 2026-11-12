@@ -84,6 +84,7 @@ $('seek').oninput=()=>{
 };
 new ResizeObserver(wave).observe($('wave'));
 function setRecording(signal, analysis) {
+  $('liveQuiet').hidden=true;
   if (signal) {
     players.pause();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -469,6 +470,7 @@ function startLivePca(context,stream,capture) {
       const result=data.result;
       state.analysis=result;
       $('rangeHigh').textContent=graph.data(result)/1000+' kHz';
+      $('liveQuiet').hidden=result.active.includes(1);
       $('elapsed').textContent=clock(result.time);
       graph.time(result.time,true);
     };
@@ -514,6 +516,7 @@ $('record').onclick=async()=>{
       capture.stopLive?.();
       stream.getTracks().forEach(track=>track.stop());
       state.recording=null;
+      $('liveQuiet').hidden=true;
       $('record').classList.remove('recording');
       $('record').innerHTML=svg('mic')+'<span>Record</span>';
       $('upload').disabled=false;$('loadDemo').disabled=false;
@@ -596,7 +599,7 @@ function setView(view) {
   const calls=state.view==='calls';
   const spatial=state.view==='manifold' || spectrogram || calls;
   viewButtons.forEach(item=>item.ariaPressed=String(item.dataset.view===view));
-  $('vizSubtitle').textContent=state.recording?'Live PCA · 5.5 s rolling window':descriptions[state.view];
+  $('vizSubtitle').textContent=state.recording?'Live PCA · Background filter on':descriptions[state.view];
   $('plotHint').hidden=!spatial;
   $('legend').hidden=spectrogram || calls;
   $('spectrumLegend').hidden=!spectrogram;

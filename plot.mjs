@@ -281,6 +281,7 @@ export function createPlot(canvas, onPick) {
     }
   }
   function projectFrame(i,p,w,h) {
+    if (data.active && !data.active[i]) return null;
     const a = p(data.coords[i*3]/scale,data.coords[i*3+1]/scale,data.coords[i*3+2]/scale);
     if (a.d <= -4.2 || !(Math.abs(a.x)<=w*5 && Math.abs(a.y)<=h*5)) return null;
     const t = data.metadata[i*4], rms = data.metadata[i*4+1];
@@ -490,8 +491,12 @@ export function createPlot(canvas, onPick) {
       spectralGrid=null;
       inspectedFrame=null;
       if (next) {
-        const magnitudes=Array.from({length:next.n},(_,i)=>Math.hypot(...next.coords.subarray(i*3,i*3+3))).sort((a,b)=>a-b);
-        scale=Math.max(1,magnitudes[Math.floor((magnitudes.length-1)*.992)] / 1.08);
+        const magnitudes=[];
+        for (let i=0;i<next.n;i++) {
+          if (!next.active || next.active[i]) magnitudes.push(Math.hypot(...next.coords.subarray(i*3,i*3+3)));
+        }
+        magnitudes.sort((a,b)=>a-b);
+        scale=Math.max(1,(magnitudes[Math.floor((magnitudes.length-1)*.992)]??0) / 1.08);
         maxCentroid=Math.max(1000,Math.ceil(next.maxCentroid/1000)*1000);
         peakMax=Math.max(4000,Math.min(16000,Math.ceil(maxCentroid/4000)*4000));
       }

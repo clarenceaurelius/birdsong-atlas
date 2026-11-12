@@ -8,6 +8,8 @@ export const SPECTRUM_BIN_HZ = RATE / FFT_SIZE;
 export const SPECTRUM_MIN_DB = -100;
 export const SPECTRUM_BINS = Math.floor(SPECTRUM_MAX_HZ / SPECTRUM_BIN_HZ) + 1;
 const PITCH_RATIO = 2 ** (.85 / 12);
+const LIVE_MIN_ACTIVE_FRAMES=5;
+const LIVE_BAND_RISE=Math.log(3.5), LIVE_PEAK_RISE=Math.log(6), LIVE_NEIGHBOR_RISE=Math.log(3);
 const TAU = 2 * Math.PI;
 const hann = Float64Array.from({length: FFT_SIZE}, (_, i) => .5 - .5 * Math.cos(TAU * i / (FFT_SIZE - 1)));
 const fftAmplitudeScale = 2 / hann.reduce((sum,value)=>sum+value,0);
@@ -17,6 +19,7 @@ const toMel = hz => 2595 * Math.log10(1 + hz / 700);
 const fromMel = mel => 700 * (10 ** (mel / 2595) - 1);
 const edges = Array.from({length: MEL_COUNT + 2}, (_, i) =>
   fromMel(toMel(100) + (toMel(16000) - toMel(100)) * i / (MEL_COUNT + 1)));
+const liveBandWeights=edges.slice(1,-1).map(hz=>Math.max(0,Math.min(1,(hz-320)/430)));
 const melBank = Array.from({length:MEL_COUNT}, (_, m) => {
   const [lo, mid, hi] = edges.slice(m, m + 3);
   const bins = [];
@@ -170,11 +173,42 @@ function writeMfcc(bands,bandOffset,mfcc,offset=0) {
   }
 }
 
+function liveNoiseFilter() {
+  const floor=new Float32Array(MEL_COUNT);
+  let frames=0;
+  return (bands,rms)=>{
+    if (!frames) floor.set(bands);
+    const warming=frames++<12;
+    let total=0, baseline=0, raisedBands=0, concentrated=false;
+    for (let i=1;i<MEL_COUNT-1;i++) {
+      const weight=liveBandWeights[i];
+      if (weight<.55) continue;
+      const excess=bands[i]-floor[i];
+      total+=weight*Math.exp(bands[i]);
+      baseline+=weight*Math.exp(floor[i]);
+      if (excess>LIVE_BAND_RISE) raisedBands++;
+      if (excess>LIVE_PEAK_RISE && Math.max(bands[i-1]-floor[i-1],bands[i+1]-floor[i+1])>LIVE_NEIGHBOR_RISE) {
+        concentrated=true;
+      }
+    }
+    const active=!warming && rms>=.00015 && (concentrated || (raisedBands>=4 && total>baseline*3));
+    for (let i=0;i<MEL_COUNT;i++) {
+      const value=bands[i], background=floor[i];
+      const cleaned=Math.exp(value)-1.6*Math.exp(background);
+      bands[i]=Math.log(Math.max(1e-8,cleaned*liveBandWeights[i]));
+      const rate=warming ? .22 : value<background ? .12 : active ? .005 : .045;
+      floor[i]+=rate*(value-background);
+    }
+    return active;
+  };
+}
+
 export function createLivePca(inputRate) {
   const frames=[];
   const real=new Float64Array(FFT_SIZE), imag=new Float64Array(FFT_SIZE);
   const power=new Float64Array(FFT_SIZE/2+1), bands=new Float32Array(MEL_COUNT);
-  let pending=new Float32Array(FFT_SIZE/2), frameCount=0, basis;
+  const filter=liveNoiseFilter();
+  let pending=new Float32Array(FFT_SIZE/2), frameCount=0, run=0, basis;
   let inputCount=0, sampleAt=0, previousSample=0;
   const maxFrames=Math.ceil(TRAIL_SECONDS*RATE/HOP)+1;
   return input=>{
@@ -201,27 +235,44 @@ export function createLivePca(inputRate) {
     for (;offset+FFT_SIZE<=block.length;offset+=HOP) {
       const {rms,centroid,peak,tonalShare}=spectrum(block,offset,real,imag,power);
       writeMelBands(power,bands);
-      const mfcc=new Float32Array(MFCC_COUNT);
-      writeMfcc(bands,0,mfcc);
-      frames.push({mfcc,rms,centroid,peak,tonalShare});
+      const mfcc=filter(bands,rms) ? new Float32Array(MFCC_COUNT) : null;
+      if (mfcc) writeMfcc(bands,0,mfcc);
+      run=mfcc ? run+1 : 0;
+      frames.push({mfcc,rms,centroid,peak,tonalShare,accepted:run>=LIVE_MIN_ACTIVE_FRAMES});
+      // Once a short run is confirmed, keep its onset in the trail.
+      if (run===LIVE_MIN_ACTIVE_FRAMES) {
+        for (let i=1;i<LIVE_MIN_ACTIVE_FRAMES;i++) frames[frames.length-1-i].accepted=true;
+      }
       frameCount++;
     }
     pending=block.slice(offset);
     if (!offset) return null;
     if (frames.length>maxFrames) frames.splice(0,frames.length-maxFrames);
     const n=frames.length, frameOffset=frameCount-n;
-    const matrix=new Float32Array(n*MFCC_COUNT), metadata=new Float32Array(n*4), tonal=new Float32Array(n);
-    let maxRms=0, maxCentroid=0;
-    frames.forEach(({mfcc,rms,centroid,peak,tonalShare},i)=>{
-      matrix.set(mfcc,i*MFCC_COUNT);
+    const matrix=new Float32Array(n*MFCC_COUNT), metadata=new Float32Array(n*4), tonal=new Float32Array(n), active=new Uint8Array(n);
+    const coords=new Float32Array(n*3);
+    let maxRms=0, maxCentroid=0, activeCount=0;
+    frames.forEach(({mfcc,rms,centroid,peak,tonalShare,accepted},i)=>{
       metadata.set([(frameOffset+i)*HOP/RATE,rms,centroid,peak],i*4);
+      if (!accepted) return;
+      active[i]=1;
+      matrix.set(mfcc,activeCount++*MFCC_COUNT);
       tonal[i]=tonalShare;
       maxRms=Math.max(maxRms,rms);
       maxCentroid=Math.max(maxCentroid,centroid);
     });
-    const projected=projectPca(matrix,n,MFCC_COUNT,basis);
-    basis=projected.basis;
-    return {n,frameOffset,coords:projected.coords,metadata,maxRms,maxCentroid,
+    if (activeCount>1) {
+      const projected=projectPca(matrix,activeCount,MFCC_COUNT,basis);
+      basis=projected.basis;
+      let row=0;
+      for (let i=0;i<n;i++) {
+        if (active[i]) {
+          coords.set(projected.coords.subarray(row*3,row*3+3),i*3);
+          row++;
+        }
+      }
+    }
+    return {n,frameOffset,coords,metadata,maxRms,maxCentroid,active,
       recurrence:pitchRecurrence(metadata,tonal,maxRms),time:(frameCount-1)*HOP/RATE};
   };
 }
