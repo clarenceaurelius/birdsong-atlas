@@ -3,6 +3,7 @@ import {trackCalls} from './call-tracks.mjs';
 export const RATE = 48000;
 const FFT_SIZE = 2048, HOP = 480, MEL_COUNT = 64, MFCC_COUNT = 40;
 export const TRAIL_SECONDS = 5.5;
+export const LIVE_TRAIL_SECONDS = 2.5;
 export const SPECTRUM_MAX_HZ = 16000;
 export const SPECTRUM_BIN_HZ = RATE / FFT_SIZE;
 export const SPECTRUM_MIN_DB = -100;
@@ -108,7 +109,7 @@ function pitchRecurrence(metadata, tonalShare, maxRms) {
   return scores;
 }
 
-export function projectPca(matrix, rowCount, dims = MFCC_COUNT, priorBasis) {
+function fitPca(matrix, rowCount, dims) {
   const mean = new Float64Array(dims);
   for (let row = 0; row < rowCount; row++) {
     for (let j = 0; j < dims; j++) mean[j] += matrix[row * dims + j] / rowCount;
@@ -144,17 +145,26 @@ export function projectPca(matrix, rowCount, dims = MFCC_COUNT, priorBasis) {
       if (aligned) break;
     }
     const largest = vector.reduce((index, v, i) => Math.abs(v) > Math.abs(vector[index]) ? i : index, 0);
-    const reference=priorBasis ? dot(vector,priorBasis[axis]) : vector[largest];
-    if (reference < 0) vector = vector.map(v => -v);
+    if (vector[largest] < 0) vector = vector.map(v => -v);
     vectors.push(vector);
     variances.push(Math.max(0, dot(vector, Float64Array.from(cov, row => dot(row, vector)))));
   }
-  const coords = new Float32Array(rowCount * 3);
-  for (let row = 0; row < rowCount; row++) {
-    for (let j = 0; j < dims; j++) centered[j] = matrix[row * dims + j] - mean[j];
-    vectors.forEach((vector, axis) => { coords[row * 3 + axis] = dot(vector, centered); });
+  return {mean, basis:vectors, explained:trace ? variances.map(v=>v/trace) : [0,0,0]};
+}
+
+function projectRow(matrix, offset, {mean,basis}, coords, target) {
+  for (let axis=0;axis<3;axis++) {
+    let value=0;
+    for (let j=0;j<mean.length;j++) value+=(matrix[offset+j]-mean[j])*basis[axis][j];
+    coords[target+axis]=value;
   }
-  return {coords, explained: trace ? variances.map(v => v / trace) : [0, 0, 0], basis:vectors};
+}
+
+export function projectPca(matrix, rowCount, dims = MFCC_COUNT) {
+  const fit=fitPca(matrix,rowCount,dims);
+  const coords=new Float32Array(rowCount*3);
+  for (let row=0;row<rowCount;row++) projectRow(matrix,row*dims,fit,coords,row*3);
+  return {coords,explained:fit.explained};
 }
 
 function writeMelBands(power,bands,offset=0) {
@@ -208,10 +218,21 @@ export function createLivePca(inputRate) {
   const real=new Float64Array(FFT_SIZE), imag=new Float64Array(FFT_SIZE);
   const power=new Float64Array(FFT_SIZE/2+1), bands=new Float32Array(MEL_COUNT);
   const filter=liveNoiseFilter();
-  let pending=new Float32Array(FFT_SIZE/2), frameCount=0, run=0, basis;
+  let pending=new Float32Array(FFT_SIZE/2), frameCount=0, run=0, fit;
   let inputCount=0, sampleAt=0, previousSample=0;
-  const maxFrames=Math.ceil(TRAIL_SECONDS*RATE/HOP)+1;
-  return input=>{
+  let scale=8;
+  const maxFrames=Math.ceil(LIVE_TRAIL_SECONDS*RATE/HOP)+1;
+  return (input,startSample=inputCount)=>{
+    if (startSample!==inputCount) {
+      // Keep missing time blank when the live worker skips queued blocks.
+      const nextFrame=Math.max(frameCount,Math.ceil(startSample*RATE/inputRate/HOP));
+      frames.push(...Array(Math.min(maxFrames,nextFrame-frameCount)).fill(null));
+      frameCount=nextFrame;
+      pending=new Float32Array(FFT_SIZE/2);
+      run=0;
+      sampleAt=startSample;
+      inputCount=startSample;
+    }
     let samples=input;
     if (inputRate!==RATE) {
       const step=inputRate/RATE, end=inputCount+input.length;
@@ -227,18 +248,18 @@ export function createLivePca(inputRate) {
       previousSample=input.at(-1);
       inputCount=end;
       samples=samples.subarray(0,count);
-    }
+    } else inputCount+=input.length;
     const block=new Float32Array(pending.length+samples.length);
     block.set(pending);
     block.set(samples,pending.length);
     let offset=0;
     for (;offset+FFT_SIZE<=block.length;offset+=HOP) {
-      const {rms,centroid,peak,tonalShare}=spectrum(block,offset,real,imag,power);
+      const {rms,centroid}=spectrum(block,offset,real,imag,power);
       writeMelBands(power,bands);
       const mfcc=filter(bands,rms) ? new Float32Array(MFCC_COUNT) : null;
       if (mfcc) writeMfcc(bands,0,mfcc);
       run=mfcc ? run+1 : 0;
-      frames.push({mfcc,rms,centroid,peak,tonalShare,accepted:run>=LIVE_MIN_ACTIVE_FRAMES});
+      frames.push({mfcc,rms,centroid,accepted:run>=LIVE_MIN_ACTIVE_FRAMES});
       // Once a short run is confirmed, keep its onset in the trail.
       if (run===LIVE_MIN_ACTIVE_FRAMES) {
         for (let i=1;i<LIVE_MIN_ACTIVE_FRAMES;i++) frames[frames.length-1-i].accepted=true;
@@ -249,31 +270,37 @@ export function createLivePca(inputRate) {
     if (!offset) return null;
     if (frames.length>maxFrames) frames.splice(0,frames.length-maxFrames);
     const n=frames.length, frameOffset=frameCount-n;
-    const matrix=new Float32Array(n*MFCC_COUNT), metadata=new Float32Array(n*4), tonal=new Float32Array(n), active=new Uint8Array(n);
-    const coords=new Float32Array(n*3);
-    let maxRms=0, maxCentroid=0, activeCount=0;
-    frames.forEach(({mfcc,rms,centroid,peak,tonalShare,accepted},i)=>{
-      metadata.set([(frameOffset+i)*HOP/RATE,rms,centroid,peak],i*4);
-      if (!accepted) return;
-      active[i]=1;
-      matrix.set(mfcc,activeCount++*MFCC_COUNT);
-      tonal[i]=tonalShare;
-      maxRms=Math.max(maxRms,rms);
-      maxCentroid=Math.max(maxCentroid,centroid);
-    });
-    if (activeCount>1) {
-      const projected=projectPca(matrix,activeCount,MFCC_COUNT,basis);
-      basis=projected.basis;
-      let row=0;
-      for (let i=0;i<n;i++) {
-        if (active[i]) {
-          coords.set(projected.coords.subarray(row*3,row*3+3),i*3);
-          row++;
+    if (!fit) {
+      const accepted=frames.filter(frame=>frame?.accepted);
+      if (accepted.length>=LIVE_MIN_ACTIVE_FRAMES) {
+        const matrix=new Float32Array(accepted.length*MFCC_COUNT);
+        accepted.forEach((frame,i)=>matrix.set(frame.mfcc,i*MFCC_COUNT));
+        fit=fitPca(matrix,accepted.length,MFCC_COUNT);
+        const sample=new Float32Array(3);
+        for (const frame of accepted) {
+          projectRow(frame.mfcc,0,fit,sample,0);
+          scale=Math.max(scale,Math.hypot(...sample));
         }
       }
     }
-    return {n,frameOffset,coords,metadata,maxRms,maxCentroid,active,
-      recurrence:pitchRecurrence(metadata,tonal,maxRms),time:(frameCount-1)*HOP/RATE};
+    const metadata=new Float32Array(n*4), active=new Uint8Array(n);
+    const coords=new Float32Array(n*3);
+    let maxRms=0;
+    frames.forEach((frame,i)=>{
+      if (!frame?.accepted || !fit) return;
+      const {rms,centroid}=frame;
+      active[i]=1;
+      if (!frame.coords) {
+        frame.coords=new Float32Array(3);
+        projectRow(frame.mfcc,0,fit,frame.coords,0);
+        frame.mfcc=null;
+      }
+      coords.set(frame.coords,i*3);
+      metadata.set([(frameOffset+i)*HOP/RATE,rms,centroid,0],i*4);
+      maxRms=Math.max(maxRms,rms);
+    });
+    return {n,frameOffset,coords,metadata,maxRms,maxCentroid:SPECTRUM_MAX_HZ,active,liveScale:scale,
+      time:(frameCount-1)*HOP/RATE};
   };
 }
 

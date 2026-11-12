@@ -416,6 +416,7 @@ $('clipAnalyze').onclick=()=>{
 new ResizeObserver(drawClip).observe($('clipWave'));
 function analyzeClip(signal,label,clipped,cropped) {
   newSession('analyzing',cropped ? label+' · cropped' : label);
+  if (state.view==='manifold') setManifold('complete');
   const id=state.id;
   $('vizHeading').title=clipped?'Only the first 60 seconds of this file were analyzed.':'';
   if (clipped && !cropped) state.source=label+' · first 60 s';
@@ -439,6 +440,14 @@ $('file').onchange=()=>{
 };
 function startLivePca(context,stream,capture) {
   let worker,source,tap,closed=false;
+  let pending=null, busy=false;
+  function sendLatest() {
+    if (closed || busy || !pending) return;
+    const {samples,startSample}=pending;
+    pending=null;
+    busy=true;
+    worker.postMessage({live:samples,startSample},[samples.buffer]);
+  }
   function close() {
     if (closed) return;
     closed=true;
@@ -467,7 +476,10 @@ function startLivePca(context,stream,capture) {
     worker.onmessage=({data})=>{
       if (closed || state.recording!==capture) return;
       if (data.error) {unavailable();return;}
+      busy=false;
+      sendLatest();
       const result=data.result;
+      if (!result) return;
       state.analysis=result;
       $('rangeHigh').textContent=graph.data(result)/1000+' kHz';
       $('liveQuiet').hidden=result.active.includes(1);
@@ -477,7 +489,7 @@ function startLivePca(context,stream,capture) {
     worker.postMessage({inputRate:context.sampleRate});
     tap=new AudioWorkletNode(context,'birdsong-microphone');
     tap.onprocessorerror=unavailable;
-    tap.port.onmessage=({data})=>worker.postMessage({live:data},[data.buffer]);
+    tap.port.onmessage=({data})=>{pending=data;sendLatest();};
     source=context.createMediaStreamSource(stream);
     source.connect(tap).connect(context.destination);
     await context.resume();
@@ -521,6 +533,7 @@ $('record').onclick=async()=>{
       $('record').innerHTML=svg('mic')+'<span>Record</span>';
       $('upload').disabled=false;$('loadDemo').disabled=false;
       viewButtons.forEach(button=>button.disabled=false);
+      manifoldButtons.forEach(button=>button.disabled=false);
       setView(state.view);
       return true;
     };
@@ -547,6 +560,7 @@ $('record').onclick=async()=>{
     setView('manifold');
     setManifold('animated');
     viewButtons.forEach(button=>button.disabled=button.dataset.view!=='manifold');
+    manifoldButtons.forEach(button=>button.disabled=button.dataset.manifold==='complete');
     $('editClip').hidden=true;
     $('elapsed').textContent='0:00';
     $('record').classList.add('recording');
@@ -599,7 +613,7 @@ function setView(view) {
   const calls=state.view==='calls';
   const spatial=state.view==='manifold' || spectrogram || calls;
   viewButtons.forEach(item=>item.ariaPressed=String(item.dataset.view===view));
-  $('vizSubtitle').textContent=state.recording?'Live PCA · Background filter on':descriptions[state.view];
+  $('vizSubtitle').textContent=state.recording?'Live PCA · 2.5 s preview':descriptions[state.view];
   $('plotHint').hidden=!spatial;
   $('legend').hidden=spectrogram || calls;
   $('spectrumLegend').hidden=!spectrogram;

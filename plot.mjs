@@ -1,4 +1,4 @@
-import {TRAIL_SECONDS, SPECTRUM_MAX_HZ, SPECTRUM_BIN_HZ, SPECTRUM_MIN_DB, SPECTRUM_BINS} from './dsp.mjs';
+import {TRAIL_SECONDS, LIVE_TRAIL_SECONDS, SPECTRUM_MAX_HZ, SPECTRUM_BIN_HZ, SPECTRUM_MIN_DB, SPECTRUM_BINS} from './dsp.mjs';
 import {CALL_POINT_STRIDE} from './call-tracks.mjs';
 
 const PALETTE = [[123,94,250],[102,156,255],[128,239,228],[225,248,156],[255,173,102]];
@@ -258,6 +258,10 @@ export function createPlot(canvas, onPick) {
       line(ctx,origin,a,'#66857999',.85);
       ctx.fillStyle = '#819aa7'; ctx.font = '9px monospace'; ctx.fillText(name,a.x+3,a.y-4);
     });
+    if (data.liveScale!=null) {
+      drawLiveTrail(ctx,p,w,h);
+      return;
+    }
     if (manifold === 'animated') {
       drawTrail(ctx,p,w,h);
       return;
@@ -282,7 +286,13 @@ export function createPlot(canvas, onPick) {
   }
   function projectFrame(i,p,w,h) {
     if (data.active && !data.active[i]) return null;
-    const a = p(data.coords[i*3]/scale,data.coords[i*3+1]/scale,data.coords[i*3+2]/scale);
+    const x=data.coords[i*3]/scale, y=data.coords[i*3+1]/scale, z=data.coords[i*3+2]/scale;
+    let shrink=1;
+    if (data.liveScale!=null) {
+      const radius=Math.hypot(x,y,z);
+      if (radius>1) shrink=(1+.38*(1-Math.exp((1-radius)/.38)))/radius;
+    }
+    const a = p(x*shrink,y*shrink,z*shrink);
     if (a.d <= -4.2 || !(Math.abs(a.x)<=w*5 && Math.abs(a.y)<=h*5)) return null;
     const t = data.metadata[i*4], rms = data.metadata[i*4+1];
     const volume = Math.min(1,rms / Math.max(.00001,data.maxRms));
@@ -310,6 +320,22 @@ export function createPlot(canvas, onPick) {
       circle(ctx,a.x,a.y,a.size,rgb(a.c,(a.visible ? .25 + .65*a.volume : .065)*opacity));
     }
     return points;
+  }
+  function drawLiveTrail(ctx,p,w,h) {
+    const step=w<440 ? 3 : 2;
+    let previous, latest;
+    for (let i=0;i<data.n;i++) {
+      if (!data.active[i]) {previous=null;continue;}
+      if ((data.frameOffset+i)%step!==0 && i!==data.n-1) continue;
+      const point=projectFrame(i,p,w,h);
+      if (!point) {previous=null;continue;}
+      const age=currentTime-(data.frameOffset+i)/FRAMES_PER_SECOND;
+      const fade=clamp(1-age/LIVE_TRAIL_SECONDS,0,1);
+      if (previous) line(ctx,previous,point,rgb(point.c,.62*fade),1.1);
+      if ((data.frameOffset+i)%(step*2)===0) circle(ctx,point.x,point.y,1+point.size*.35,rgb(point.c,.72*fade));
+      previous=latest=point;
+    }
+    if (latest && data.n-1-latest.i<10) circle(ctx,latest.x,latest.y,2.5,rgb(latest.c,.96));
   }
   function drawTrail(ctx,p,w,h) {
     const step = w<440 ? 3 : 2;
@@ -490,7 +516,10 @@ export function createPlot(canvas, onPick) {
       raster=null;
       spectralGrid=null;
       inspectedFrame=null;
-      if (next) {
+      if (next?.liveScale!=null) {
+        scale=next.liveScale;
+        maxCentroid=next.maxCentroid;
+      } else if (next) {
         const magnitudes=[];
         for (let i=0;i<next.n;i++) {
           if (!next.active || next.active[i]) magnitudes.push(Math.hypot(...next.coords.subarray(i*3,i*3+3)));

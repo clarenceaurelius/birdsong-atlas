@@ -4,8 +4,8 @@ self.onmessage = ({data}) => {
   try {
     if (data.inputRate) {livePca=createLivePca(data.inputRate);return;}
     if (data.live) {
-      const result=livePca(data.live);
-      if (result) self.postMessage({result},[result.coords.buffer,result.metadata.buffer,result.recurrence.buffer,result.active.buffer]);
+      const result=livePca(data.live,data.startSample);
+      self.postMessage({result},result?[result.coords.buffer,result.metadata.buffer,result.active.buffer]:[]);
       return;
     }
     const signal = data.demo ? makeDemo() : data.signal;
