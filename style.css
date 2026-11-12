@@ -108,3 +108,9 @@ main{max-width:1440px;margin:auto;padding:0 clamp(22px,4.8vw,72px) 36px}.intro{p
   .panel-top .segments button { min-height: 40px; }
   .plot[data-view="spectrogram"] .plot-hint { max-width: calc(100% - 106px); }
 }
+.call-legend { top: 57px; bottom: auto; }
+.call-legend .gradient { background: linear-gradient(90deg,#748eff,#7ce8cd,#ff856c); }
+.panel-top .segments { flex-wrap: wrap; max-width: 100%; }
+@media (max-width: 420px) {
+  .panel-top [data-view="energy"] { grid-column: 1 / -1; }
+}

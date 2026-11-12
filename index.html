@@ -72,13 +72,14 @@
             <div class="panel-title"><div class="section-icon"><svg><use href="#i-box"/></svg></div><div><h2 id="vizHeading">Sound Explorer</h2><p id="vizSubtitle">40 MFCCs → 3 principal components</p></div></div>
             <div class="segments" aria-label="Visualization view">
               <button data-view="manifold" aria-pressed="true">3D manifold</button>
+              <button data-view="calls" aria-pressed="false">3D call trails</button>
               <button data-view="spectrogram" aria-pressed="false">3D spectrogram</button>
               <button data-view="pitch" aria-pressed="false">Pitch trail</button>
               <button data-view="energy" aria-pressed="false">Energy flow</button>
             </div>
           </div>
           <div class="manifold-controls" id="manifoldControls">
-            <div class="segments" role="group" aria-label="3D manifold display">
+            <div class="segments" id="manifoldOptions" role="group" aria-label="3D manifold display">
               <button type="button" data-manifold="animated" aria-pressed="true" aria-controls="visual">Animated</button>
               <button type="button" data-manifold="complete" aria-pressed="false" aria-controls="visual">Complete</button>
             </div>
@@ -94,6 +95,7 @@
             <div class="plot-hint" id="plotHint"><svg><use href="#i-rotate"/></svg> Drag to rotate · Scroll or pinch to zoom</div>
             <div class="legend" id="legend"><span>SPECTRAL CENTROID</span><div class="gradient"></div><div><span id="rangeLow">0 kHz</span><span id="rangeHigh">8 kHz</span></div></div>
             <div class="legend spectrum-legend" id="spectrumLegend" hidden><span>SPECTRAL LEVEL</span><div class="gradient"></div><div><span>−80 dBFS</span><span>0</span></div></div>
+            <div class="legend call-legend" id="callLegend" hidden><span>SLOPE (kHz/s)</span><div class="gradient"></div><div><span>Falling</span><span>Rising</span></div></div>
             <div id="point" class="point" hidden></div>
           </div>
           <div class="transport">
@@ -121,6 +123,7 @@
         <article class="panel method-card"><h2>From audio to points</h2><p>The app computes 40 mel-frequency cepstral coefficients for each frame. It centers the coefficient vectors and fits principal component analysis to the recording. The first three components position each point.</p><p>Animated mode draws a connected trail that fades over 5.5 seconds. When a distinct note with a similar dominant frequency returns, its nodes swell. Color encodes spectral centroid. Tap a node to inspect its time, dominant frequency, centroid and amplitude. Complete mode shows the full trajectory.</p></article>
         <article class="panel method-card"><h2>From audio to species</h2><p>BirdNET scores overlapping three-second windows independently for each species, so several species can appear in the same window. A species selection highlights its detection windows in the mixed recording.</p><p>With your permission, BirdNET’s geomodel uses your coordinates and time of year to refine ranking. Acoustic confidence remains visible separately. The demo uses synthesized audio and illustrative detections.</p></article>
         <article class="panel method-card"><h2>Reading the 3D spectrogram</h2><p>Time and frequency run along the floor. Height and color both show spectral level in decibels relative to digital full scale (dBFS). Each displayed cell keeps the strongest FFT bin in its time and frequency range. Tap a ridge to inspect its frequency and jump to that part of the recording.</p></article>
+        <article class="panel method-card"><h2>Reading 3D call trails</h2><p>The axes show frequency, spectral level, and how fast the frequency is rising or falling. Up to eight spectral peaks per frame can form separate trails. Trails fade over 5.5 seconds and break when peaks drop out or their paths become ambiguous. Peaks can come from overlapping calls or harmonics of the same call.</p></article>
       </div>
       <div class="credits">
         <p>Visualization inspiration <a href="https://www.lucioarese.net/seeing-birdsong/" target="_blank" rel="noreferrer">Seeing Birdsong · Lucio Arese ↗</a></p>

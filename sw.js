@@ -1,6 +1,6 @@
-const CACHE = 'birdsong-atlas-5';
+const CACHE = 'birdsong-atlas-6';
 const SHELL = ['./','./index.html','./style.css','./app.mjs','./plot.mjs','./dsp.mjs','./dsp-worker.mjs',
-  './model-worker.mjs','./manifest.webmanifest','./assets/icon.png','./assets/icon-large.png'];
+  './call-tracks.mjs','./model-worker.mjs','./manifest.webmanifest','./assets/icon.png','./assets/icon-large.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(()=>self.skipWaiting()));
 });

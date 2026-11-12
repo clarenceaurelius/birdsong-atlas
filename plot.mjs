@@ -1,4 +1,5 @@
 import {TRAIL_SECONDS, SPECTRUM_MAX_HZ, SPECTRUM_BIN_HZ, SPECTRUM_MIN_DB, SPECTRUM_BINS} from './dsp.mjs';
+import {CALL_POINT_STRIDE} from './call-tracks.mjs';
 
 const PALETTE = [[123,94,250],[102,156,255],[128,239,228],[225,248,156],[255,173,102]];
 const MANIFOLD_PALETTE = [[104,84,245],[72,151,255],[66,227,147],[202,249,104],[255,190,79],[255,88,77],[239,70,158]];
@@ -6,6 +7,7 @@ const MANIFOLD_STOPS = [0,.14,.33,.47,.54,.65,1];
 const FRAMES_PER_SECOND = 100;
 const SPECTROGRAM_FLOOR = -80;
 const SPECTROGRAM_PALETTE = [[28,31,55],[80,76,169],[54,170,208],[100,234,190],[255,216,115]];
+const CALL_PALETTE = [[116,142,255],[124,232,205],[255,133,108]];
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 function color(t, palette = PALETTE) {
   const at = clamp(t,0,1) * (palette.length - 1), i = Math.min(Math.floor(at), palette.length - 2);
@@ -63,15 +65,21 @@ function poolSpectrum(data, columns, rows) {
 
 export function createPlot(canvas, onPick, startPaused = false) {
   let data, selected = null, mode = 'manifold', currentTime = 0, showingPlayhead = false, pending = 0;
-  const manifoldCamera = {yaw:-.47,pitch:-.37,zoom:1};
-  const spectrumCamera = {yaw:-.54,pitch:-.53,zoom:1};
+  const cameraDefaults = {
+    manifold:{yaw:-.47,pitch:-.37,zoom:1},
+    spectrogram:{yaw:-.54,pitch:-.53,zoom:1},
+    calls:{yaw:-.53,pitch:-.47,zoom:1}
+  };
+  const cameras = Object.fromEntries(Object.entries(cameraDefaults).map(([name,values])=>[name,{...values}]));
+  const manifoldCamera=cameras.manifold;
   let camera = manifoldCamera, scale = 1, maxCentroid = 8000, peakMax = 10000;
   let hit = [], pointerStart = null, pinched = false, raster, completeLayer;
   let spectralGrid, spectralLayer;
   let manifold = 'animated', animationPaused = startPaused, audioPlaying = false;
   let previewTime = 0, previousTick = null, inspectedFrame = null, trailHead = null;
   const pointers = new Map();
-  const is3d = () => mode==='manifold' || mode==='spectrogram';
+  const is3d = () => Boolean(cameras[mode]);
+  const usesSpectralPeaks = () => mode==='spectrogram' || mode==='calls';
   const highlight = time => !selected || selected.some(([start,end]) => time >= start && time <= end);
   const frameAt = time => clamp(Math.round(time * FRAMES_PER_SECOND),0,data.n-1);
   function nextPreviewTime(time) {
@@ -86,12 +94,14 @@ export function createPlot(canvas, onPick, startPaused = false) {
     hit = [];
     trailHead = null;
     if (!area || !data) { previousTick = null; return; }
-    const preview = mode === 'manifold' && manifold === 'animated' && !animationPaused && !audioPlaying;
+    const animated = mode==='calls' || (mode==='manifold' && manifold==='animated');
+    const preview = animated && !animationPaused && !audioPlaying;
     if (preview && previousTick !== null) {
       previewTime = nextPreviewTime(previewTime + Math.min(.1,(now-previousTick)/1000));
     }
     previousTick = preview ? now : null;
-    if (mode === 'spectrogram') drawSpectrogram(area);
+    if (mode === 'calls') drawCallTrails(area);
+    else if (mode === 'spectrogram') drawSpectrogram(area);
     else if (mode === 'manifold') draw3d(area);
     else draw2d(area);
     if (preview) invalidate();
@@ -110,6 +120,71 @@ export function createPlot(canvas, onPick, startPaused = false) {
     const s = Math.min(w * .42,h * .405) * zoom * perspective * padding;
     return {x:w*.51 + ax*s,y:h*.47 - ay*s,d};
   }
+  function projectAxes(x,y,z,w,h) {
+    const compact=w<440;
+    const point=project(x,y,z,w,h,compact ? .77 : .76);
+    point.x+=compact ? 8 : 0;
+    point.y-=h*.065;
+    return point;
+  }
+  function drawCallTrails({ctx,w,h}) {
+    const tracks=data.callTracks;
+    if (!tracks) return;
+    const limit=Math.max(10000,Math.ceil(tracks.maxSlope/5000)*5000);
+    const base=-.72;
+    const xAt=hz=>-1.15+2.3*hz/SPECTRUM_MAX_HZ;
+    const yAt=db=>base+1.6*clamp((db-SPECTROGRAM_FLOOR)/-SPECTROGRAM_FLOOR,0,1);
+    const zAt=slope=>.8*slope/limit;
+    const p=(x,y,z)=>projectAxes(x,y,z,w,h);
+    const origin=p(-1.15,base,-.8);
+    for (const z of [-.8,0,.8]) {
+      line(ctx,p(-1.15,base,z),p(1.15,base,z),z===0?'#65998c':'#355261',z===0?1.2:.75);
+    }
+    for (const x of [-1.15,0,1.15]) line(ctx,p(x,base,-.8),p(x,base,.8),'#355261',.75);
+    line(ctx,origin,p(1.15,base,-.8),'#93b0bd');
+    line(ctx,origin,p(-1.15,base,.8),'#93b0bd');
+    line(ctx,origin,p(-1.15,yAt(0),-.8),'#93b0bd');
+    ctx.font='10px monospace';ctx.fillStyle='#b5cbd3';
+    for (let i=0;i<3;i++) {
+      const hz=SPECTRUM_MAX_HZ*i/2, slope=(i-1)*limit, db=SPECTROGRAM_FLOOR*(1-i/2);
+      const a=p(xAt(hz),base,-.8), b=p(-1.15,base,zAt(slope)), c=p(-1.15,yAt(db),-.8);
+      ctx.textAlign='center';ctx.fillText(hz/1000+' kHz',a.x,a.y+15);
+      ctx.textAlign='right';ctx.fillText((slope>0?'+':'')+slope/1000,b.x-4,b.y+4);
+      ctx.textAlign=c.x<43?'left':'right';ctx.fillText(db+' dBFS',c.x+(c.x<43?6:-7),c.y-5);
+    }
+    ctx.textAlign='start';
+    const step=w<440 ? 4 : 3;
+    const last=Math.min(data.n-1,Math.floor(previewTime*FRAMES_PER_SECOND+1e-6));
+    const start=Math.max(0,Math.ceil((previewTime-TRAIL_SECONDS)*FRAMES_PER_SECOND/step)*step);
+    const prior=new Map();
+    const nodes=[];
+    for (let frame=Math.min(start,last);frame>=0 && frame<=last;frame=Math.min(frame+step,last)) {
+      const time=frame/FRAMES_PER_SECOND;
+      const age=Math.max(0,previewTime-time);
+      const fade=clamp(1-age/TRAIL_SECONDS,0,1)**1.45;
+      if (fade>.02 && highlight(time)) {
+        for (let i=tracks.offsets[frame];i<tracks.offsets[frame+1];i++) {
+          const offset=i*CALL_POINT_STRIDE;
+          const hz=tracks.points[offset], db=tracks.points[offset+1];
+          const slope=tracks.points[offset+2], track=tracks.points[offset+3];
+          const tint=color((slope/limit+1)/2,CALL_PALETTE);
+          const point={...p(xAt(hz),yAt(db),zAt(slope)),i:frame,hz,db,slope,tint,fade,age};
+          const previous=prior.get(track);
+          if (previous && frame-previous.i<=step) line(ctx,previous,point,rgb(tint,.65*fade),.85+.7*fade);
+          prior.set(track,point);
+          if (frame===last || frame%(step*2)===0) nodes.push(point);
+        }
+      }
+      if (frame===last) break;
+    }
+    for (const point of nodes.sort((a,b)=>b.d-a.d)) {
+      const {x,y,tint,fade,age}=point;
+      const leading=age<.07;
+      if (leading) circle(ctx,x,y,7,rgb(tint,.17));
+      circle(ctx,x,y,leading?3.5:1.25+1.1*fade,rgb(tint,.9*fade));
+      if (fade>.1) hit.push(point);
+    }
+  }
   function drawSpectrogram({ctx,w,h}) {
     if (!data.spectralLevels) return;
     const duration = Math.max(data.duration,.01);
@@ -117,13 +192,7 @@ export function createPlot(canvas, onPick, startPaused = false) {
     const zAt = hz => -.8 + 1.6*hz/SPECTRUM_MAX_HZ;
     const height = db => clamp((db-SPECTROGRAM_FLOOR)/-SPECTROGRAM_FLOOR,0,1);
     const base = -.72, yAt = db => base + 1.6*height(db);
-    const compact = w<440;
-    const p = (x,y,z) => {
-      const point=project(x,y,z,w,h,compact ? .77 : .76);
-      point.x+=compact ? 8 : 0;
-      point.y-=h*.065;
-      return point;
-    };
+    const p = (x,y,z) => projectAxes(x,y,z,w,h);
     const cols = Math.min(data.n,w<440 ? 84 : 144), rows = w<440 ? 56 : 72;
     if (!spectralGrid || spectralGrid.cols!==cols || spectralGrid.rows!==rows) {
       spectralGrid={cols,rows,cells:poolSpectrum(data,cols,rows)};
@@ -371,7 +440,7 @@ export function createPlot(canvas, onPick, startPaused = false) {
       const d = is3d() ? Math.hypot(a.x-x,a.y-y) : Math.abs(a.x-x);
       if (d < distance) { closest = a; distance = d; }
     }
-    onPick(closest?.i,mode==='spectrogram' ? closest : undefined);
+    onPick(closest?.i,usesSpectralPeaks() ? closest : undefined);
   }
   function span() {
     const [a,b] = pointers.values();
@@ -410,8 +479,8 @@ export function createPlot(canvas, onPick, startPaused = false) {
     if (e.key==='Escape') { onPick(); return; }
     if (e.key==='Enter' || e.key===' ') {
       e.preventDefault();
-      if (data && mode==='spectrogram') {
-        const frame=frameAt(currentTime);
+      if (data && usesSpectralPeaks()) {
+        const frame=frameAt(mode==='calls'?previewTime:currentTime);
         const point=hit.reduce((best,cell)=>{
           if (!best) return cell;
           const distance=Math.abs(cell.i-frame), nearest=Math.abs(best.i-frame);
@@ -444,7 +513,7 @@ export function createPlot(canvas, onPick, startPaused = false) {
       redrawProjection();
       return maxCentroid;
     },
-    view(next) {mode=next;camera=next==='spectrogram'?spectrumCamera:manifoldCamera;previousTick=null;invalidate();},
+    view(next) {mode=next;camera=cameras[next]??manifoldCamera;previousTick=null;invalidate();},
     manifold(next) {manifold=next;previousTick=null;invalidate();},
     pauseAnimation(paused,index = null) {
       animationPaused=paused;
@@ -455,7 +524,7 @@ export function createPlot(canvas, onPick, startPaused = false) {
       invalidate();
     },
     reset() {
-      Object.assign(camera,mode==='spectrogram'?{yaw:-.54,pitch:-.53,zoom:1}:{yaw:-.47,pitch:-.37,zoom:1});
+      Object.assign(camera,cameraDefaults[mode]??cameraDefaults.manifold);
       redrawProjection();
     },
     selection(windows) {

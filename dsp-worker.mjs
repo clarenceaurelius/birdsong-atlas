@@ -4,6 +4,7 @@ self.onmessage = ({data}) => {
     const signal = data.demo ? makeDemo() : data.signal;
     const result = analyze(signal);
     const transfer = [result.coords.buffer, result.metadata.buffer, result.mfcc.buffer, result.bands.buffer, result.recurrence.buffer, result.spectralLevels.buffer];
+    transfer.push(result.callTracks.points.buffer,result.callTracks.offsets.buffer);
     if (data.demo) transfer.push(signal.buffer);
     self.postMessage({result, ...(data.demo && {signal})}, transfer);
   } catch (error) {

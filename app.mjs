@@ -98,15 +98,19 @@ function inspectPoint(index,spectralCell) {
   const [time,rms,centroid,peak]=state.analysis.metadata.subarray(index*4,index*4+4);
   point.replaceChildren();
   const rows=spectralCell ? [clock(time,true),
-    (spectralCell.hz/1000).toFixed(2)+' kHz · '+spectralCell.db+' dBFS'] :
+    (spectralCell.hz/1000).toFixed(2)+' kHz · '+spectralCell.db.toFixed(0)+' dBFS'] :
     [clock(time,true)+' · '+(20*Math.log10(Math.max(rms,.000001))).toFixed(1)+' dBFS RMS',
     'Centroid '+(centroid/1000).toFixed(2)+' kHz',
     'Dominant '+(peak/1000).toFixed(2)+' kHz'];
   if (!spectralCell && state.analysis.recurrence?.[index] >= .4) rows.push('Similar frequency heard recently');
+  if (spectralCell?.slope!=null) {
+    const slope=spectralCell.slope/1000;
+    rows.push((slope>=.005?'+':'')+(Math.abs(slope)<.005?'0.00':slope.toFixed(2))+' kHz/s');
+  }
   for (const row of rows) {const div=document.createElement('div');div.textContent=row;point.append(div);}
   point.hidden=false;
   if (state.signal) players.currentTime=Math.min(time,state.duration);
-  if (state.view==='manifold' && state.manifold==='animated') {
+  if (state.view==='calls' || (state.view==='manifold' && state.manifold==='animated')) {
     graph.seek(time);
     pauseAnimation(true,index);
   }
@@ -453,10 +457,10 @@ $('record').onclick=async()=>{
     notice(error.name==='NotAllowedError'?'Microphone permission is off. You can enable it in your browser or import audio.':'The microphone is unavailable. You can import an audio file instead.',true);
   } finally {$('record').disabled=false;}
 };
-const descriptions={manifold:'40 MFCCs → 3 principal components',spectrogram:'Time × frequency × spectral level',pitch:'Mel spectrogram and dominant frequency',energy:'Relative RMS amplitude over time'};
+const descriptions={manifold:'40 MFCCs → 3 principal components',calls:'Frequency × level × frequency slope',spectrogram:'Time × frequency × spectral level',pitch:'Mel spectrogram and dominant frequency',energy:'Relative RMS amplitude over time'};
 function renderAnimationControl() {
   const control=$('animationControl');
-  control.hidden=state.manifold!=='animated';
+  control.hidden=state.view!=='calls' && state.manifold!=='animated';
   control.disabled=!state.analysis;
   const label=state.animationPaused?'Resume animation':'Pause animation';
   control.innerHTML=svg(state.animationPaused?'play':'pause')+'<span>'+label+'</span>';
@@ -467,6 +471,10 @@ function pauseAnimation(paused,index) {
   renderAnimationControl();
 }
 function describePlot() {
+  if (state.view==='calls') {
+    $('visual').ariaLabel='3D call trails. Frequency in kilohertz, level in dBFS, and slope in kilohertz per second. Use arrow keys to rotate or press Enter to inspect a recent peak.';
+    return;
+  }
   if (state.view==='spectrogram') {
     $('visual').ariaLabel='3D spectrogram. Time in seconds, frequency in kilohertz, spectral level in dBFS. Use arrow keys to rotate or press Enter to inspect a peak near the playhead.';
     return;
@@ -493,14 +501,18 @@ $('animationControl').onclick=()=>{
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{
   state.view=button.dataset.view;
   const spectrogram=state.view==='spectrogram';
-  const spatial=state.view==='manifold' || spectrogram;
+  const calls=state.view==='calls';
+  const spatial=state.view==='manifold' || spectrogram || calls;
   document.querySelectorAll('[data-view]').forEach(item=>item.ariaPressed=String(item===button));
   $('vizSubtitle').textContent=descriptions[state.view];
   $('plotHint').hidden=!spatial;
-  $('legend').hidden=spectrogram;
+  $('legend').hidden=spectrogram || calls;
   $('spectrumLegend').hidden=!spectrogram;
+  $('callLegend').hidden=!calls;
   $('plot').dataset.view=state.view;
-  $('manifoldControls').hidden=state.view!=='manifold';
+  $('manifoldControls').hidden=state.view!=='manifold' && !calls;
+  $('manifoldOptions').hidden=calls;
+  renderAnimationControl();
   describePlot();
   $('visual').style.touchAction=spatial?'none':'pan-y';
   inspectPoint(null);

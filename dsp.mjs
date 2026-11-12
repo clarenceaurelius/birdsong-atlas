@@ -1,3 +1,5 @@
+import {trackCalls} from './call-tracks.mjs';
+
 export const RATE = 48000;
 const FFT_SIZE = 2048, HOP = 480, MEL_COUNT = 64, MFCC_COUNT = 40;
 export const TRAIL_SECONDS = 5.5;
@@ -186,7 +188,8 @@ export function analyze(signal) {
     }
   }
   return {n, duration:signal.length/RATE, spectralLevels, ...projectPca(mfcc, n), metadata, mfcc, bands, recurrence: pitchRecurrence(metadata,tonal,maxRms), maxRms, minBand, maxBand,
-    maxCentroid, bandHz: edges.slice(1, -1)};
+    maxCentroid, bandHz: edges.slice(1, -1),
+    callTracks:trackCalls(spectralLevels,n,SPECTRUM_BINS,SPECTRUM_BIN_HZ,SPECTRUM_MIN_DB,HOP/RATE)};
 }
 
 export const demoBirds = [
