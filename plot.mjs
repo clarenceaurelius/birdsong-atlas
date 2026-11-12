@@ -119,9 +119,9 @@ export function createPlot(canvas, onPick, startPaused = false) {
     const base = -.72, yAt = db => base + 1.6*height(db);
     const compact = w<440;
     const p = (x,y,z) => {
-      const point=project(x,y,z,w,h,compact ? .77 : .91);
+      const point=project(x,y,z,w,h,compact ? .77 : .76);
       point.x+=compact ? 8 : 0;
-      point.y-=compact ? 14 : 0;
+      point.y-=h*.065;
       return point;
     };
     const cols = Math.min(data.n,w<440 ? 84 : 144), rows = w<440 ? 56 : 72;
